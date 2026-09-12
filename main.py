@@ -6,8 +6,10 @@
 import logging
 import asyncio
 from aiogram import Bot, Dispatcher, types
+from aiogram.filters import CommandStart
 from config import BOT_TOKEN
 from db import init_db
+
 
 logging.basicConfig(level=logging.INFO)
 
@@ -18,14 +20,13 @@ dp = Dispatcher()
 init_db()
 
 
-@dp.message(types.Message)
+@dp.message(CommandStart())
 async def start(message: types.Message):
-    if message.text == "/start":
-        await message.answer(
-            f"Привет, {message.from_user.full_name}!\n"
-            "Я бот для организации спортивных событий.\n"
-            "Скоро здесь появятся команды для создания событий и записи."
-        )
+    await message.answer(
+        f"Привет, {message.from_user.full_name}!\n"
+        "Я бот для организации спортивных событий.\n"
+        "Скоро здесь появятся команды для создания событий и записи."
+    )
 
 
 async def main():
