@@ -4,6 +4,7 @@
 Содержит клавиатуры и кнопки для бота.
 """
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from config import TOPICS
 
 
 # ============================================================
@@ -71,3 +72,19 @@ def get_event_keyboard(event_id):
         [InlineKeyboardButton(text="❌ Отменить запись", callback_data=f"cancel_{event_id}")],
     ])
     return keyboard
+
+
+def get_topics_keyboard():
+    """Клавиатура с выбором топика для публикации."""
+    buttons = []
+    for key, topic in TOPICS.items():
+        buttons.append([
+            InlineKeyboardButton(
+                text=topic["name"],
+                callback_data=f"topic_{key}"
+            )
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)

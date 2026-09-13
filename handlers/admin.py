@@ -17,10 +17,14 @@ from aiogram.types import CallbackQuery
 
 from config import ADMIN_IDS
 from config import GROUP_ID
+from config import TOPICS
+
 from db import create_event
 from db import get_event
+
 from keyboards import get_cancel_keyboard, get_skip_keyboard, get_main_menu
 from keyboards import get_publish_keyboard, get_event_keyboard
+from keyboards import get_topics_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -248,19 +252,44 @@ async def cancel_handler(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "publish_event")
 async def publish_event(callback: CallbackQuery, bot: Bot):
-    """Публикует событие в группу."""
+    """Показывает выбор топика для публикации."""
     from db import get_all_events
-
     events = get_all_events()
     if not events:
         await callback.message.answer("⚠️ Нет событий для публикации.")
         await callback.answer()
         return
 
-    event = events[-1]  # Последнее созданное
+    await callback.message.answer(
+        "📤 Куда опубликовать событие?\n\n"
+        "Выберите топик:",
+        reply_markup=get_topics_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("topic_"))
+async def publish_to_topic(callback: CallbackQuery, bot: Bot):
+    """Публикует событие в выбранный топик."""
+    # Получаем ключ топика
+    topic_key = callback.data.replace("topic_", "")
+    topic = TOPICS.get(topic_key)
+
+    if not topic:
+        await callback.answer("⚠️ Топик не найден.", show_alert=True)
+        return
+
+    # Получаем последнее событие
+    from db import get_all_events
+    events = get_all_events()
+    if not events:
+        await callback.answer("⚠️ Нет событий для публикации.", show_alert=True)
+        return
+
+    event = events[-1]
     event_id = event[0]
 
-    # Формируем сообщение для группы
+    # Формируем сообщение
     text = (
         f"📅 *{event[1]}*\n\n"
         f"📍 *Место:* {event[3]}\n"
@@ -273,13 +302,19 @@ async def publish_event(callback: CallbackQuery, bot: Bot):
         f"Нажмите «✅ Я в деле», чтобы записаться!"
     )
 
-    # Отправляем в группу
-    await bot.send_message(
-        chat_id=GROUP_ID,
-        text=text,
-        parse_mode="Markdown",
-        reply_markup=get_event_keyboard(event_id)
-    )
+    # Отправляем в выбранный топик
+    try:
+        await bot.send_message(
+            chat_id=GROUP_ID,
+            message_thread_id=topic["thread_id"],
+            text=text,
+            parse_mode="Markdown",
+            reply_markup=get_event_keyboard(event_id)
+        )
+        await callback.message.answer(
+            f"✅ Событие опубликовано в топик {topic['name']}!"
+        )
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка при публикации: {e}")
 
-    await callback.message.answer("✅ Событие опубликовано в группе!")
     await callback.answer()

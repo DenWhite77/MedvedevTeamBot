@@ -32,3 +32,14 @@ GROUP_ID = int(os.getenv("GROUP_ID_2", 0))
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден в .env!")
+
+# ============================================================
+# Топики группы Medvedev Volley Team
+# ============================================================
+TOPICS = {
+    "general": {"name": "📢 General", "thread_id": 1},
+    "trainings": {"name": "🏐 Тренировки", "thread_id": 4357},
+    "photo_video": {"name": "📸 Фото/видео", "thread_id": 4358},
+    "flood": {"name": "💬 Флудилка", "thread_id": 4359},
+    "camps": {"name": "🏕 Кемпы и турниры", "thread_id": 4559},
+}
