@@ -11,10 +11,16 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
+from aiogram import Bot
+from aiogram import F
+from aiogram.types import CallbackQuery
 
 from config import ADMIN_IDS
+from config import GROUP_ID
 from db import create_event
+from db import get_event
 from keyboards import get_cancel_keyboard, get_skip_keyboard, get_main_menu
+from keyboards import get_publish_keyboard, get_event_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +214,7 @@ async def process_comment(message: Message, state: FSMContext):
     await message.answer(
         summary,
         parse_mode="Markdown",
-        reply_markup=get_cancel_keyboard()
+        reply_markup=get_publish_keyboard()
     )
 
     # Сохраняем событие в БД
@@ -238,3 +244,42 @@ async def cancel_handler(message: Message, state: FSMContext):
     """Отмена любого диалога."""
     await state.clear()
     await message.answer("Действие отменено.", reply_markup=get_main_menu())
+
+
+@router.callback_query(F.data == "publish_event")
+async def publish_event(callback: CallbackQuery, bot: Bot):
+    """Публикует событие в группу."""
+    from db import get_all_events
+
+    events = get_all_events()
+    if not events:
+        await callback.message.answer("⚠️ Нет событий для публикации.")
+        await callback.answer()
+        return
+
+    event = events[-1]  # Последнее созданное
+    event_id = event[0]
+
+    # Формируем сообщение для группы
+    text = (
+        f"📅 *{event[1]}*\n\n"
+        f"📍 *Место:* {event[3]}\n"
+        f"📅 *Дата:* {event[4]}\n"
+        f"🕐 *Время:* {event[5]}\n"
+        f"👥 *Макс. участников:* {event[6]}\n"
+        f"💰 *Стоимость:* {event[7]} ₽\n"
+        f"💳 *Оплата:* {event[8]}\n"
+        f"📝 *Комментарий:* {event[9] or '—'}\n\n"
+        f"Нажмите «✅ Я в деле», чтобы записаться!"
+    )
+
+    # Отправляем в группу
+    await bot.send_message(
+        chat_id=GROUP_ID,
+        text=text,
+        parse_mode="Markdown",
+        reply_markup=get_event_keyboard(event_id)
+    )
+
+    await callback.message.answer("✅ Событие опубликовано в группе!")
+    await callback.answer()
