@@ -88,3 +88,20 @@ def get_topics_keyboard():
         InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_payment_confirm_keyboard(event_id, user_id):
+    """Кнопки подтверждения оплаты для админа."""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="✅ Подтвердить",
+                callback_data=f"confirm_payment_{event_id}_{user_id}"
+            ),
+            InlineKeyboardButton(
+                text="❌ Отклонить",
+                callback_data=f"reject_payment_{event_id}_{user_id}"
+            ),
+        ],
+    ])
+    return keyboard

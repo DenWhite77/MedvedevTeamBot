@@ -11,8 +11,13 @@ from aiogram import Router, types, F, Bot
 from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from config import ADMIN_IDS
+
 from db import get_event, add_participant, get_participants, remove_participant
+from db import mark_paid
+
 from keyboards import get_event_keyboard
+from keyboards import get_payment_confirm_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -127,3 +132,50 @@ async def join_event(callback: CallbackQuery, bot: Bot):
         )
     except Exception as e:
         logger.warning(f"Не удалось обновить сообщение: {e}")
+
+
+@router.callback_query(F.data.startswith("paid_"))
+async def paid_event(callback: CallbackQuery, bot: Bot):
+    """Участник сообщает, что оплатил."""
+    event_id = int(callback.data.split("_")[1])
+
+    # Проверяем, что событие есть
+    event = get_event(event_id)
+    if not event:
+        await callback.answer("⚠️ Событие не найдено.", show_alert=True)
+        return
+
+    # Проверяем, что участник записан
+    participants = get_participants(event_id)
+    user_ids = [p[0] for p in participants]  # p[0] = user_id
+
+    user = callback.from_user
+    if user.id not in user_ids:
+        await callback.answer(
+            "⚠️ Сначала нажми «✅ Я в деле», чтобы записаться!",
+            show_alert=True
+        )
+        return
+
+    # Отмечаем, что оплатил
+    mark_paid(event_id, user.id)
+    await callback.answer("✅ Спасибо! Админ проверит оплату.")
+
+    # Отправляем уведомление всем админам
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                chat_id=admin_id,
+                text=(
+                    f"💳 *{user.full_name}* сообщил, что оплатил:\n\n"
+                    f"📅 *{event[1]}*\n"
+                    f"💰 Стоимость: {event[7]} ₽\n"
+                    f"📍 {event[3]}\n"
+                    f"📅 {event[4]} в {event[5]}\n\n"
+                    f"Подтвердить оплату?"
+                ),
+                parse_mode="Markdown",
+                reply_markup=get_payment_confirm_keyboard(event_id, user.id)
+            )
+        except Exception as e:
+            logger.warning(f"Не удалось отправить уведомление админу {admin_id}: {e}")

@@ -23,6 +23,7 @@ from config import TOPICS
 
 from db import create_event
 from db import get_event
+from db import confirm_payment, remove_participant
 
 from keyboards import get_cancel_keyboard, get_skip_keyboard, get_main_menu
 from keyboards import get_publish_keyboard, get_event_keyboard
@@ -334,3 +335,50 @@ async def get_topic_id(message: Message):
         f"📌 message_thread_id: {thread_id}\n"
         f"chat_id: {chat_id}"
     )
+
+
+@router.callback_query(F.data.startswith("confirm_payment_"))
+async def confirm_payment_handler(callback: CallbackQuery, bot: Bot):
+    """Админ подтверждает оплату — участник переходит в основной состав."""
+    parts = callback.data.split("_")
+    event_id = int(parts[2])
+    user_id = int(parts[3])
+
+    # Подтверждаем оплату в БД
+    confirm_payment(event_id, user_id)
+
+    await callback.message.answer("✅ Оплата подтверждена!")
+
+    # Обновляем сообщение в группе
+    from db import get_event, get_participants
+    from handlers.user import format_event_message
+    event = get_event(event_id)
+    participants = get_participants(event_id)
+    new_text = format_event_message(event, participants)
+
+    try:
+        # Находим сообщение с событием в группе (по ID из уведомления)
+        # Проще всего — отправить новое сообщение в тот же топик
+        await bot.send_message(
+            chat_id=GROUP_ID,
+            message_thread_id=callback.message.message_thread_id,
+            text=new_text,
+            parse_mode="Markdown",
+            reply_markup=get_event_keyboard(event_id)
+        )
+    except Exception as e:
+        logger.warning(f"Не удалось обновить сообщение в группе: {e}")
+
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("reject_payment_"))
+async def reject_payment_handler(callback: CallbackQuery, bot: Bot):
+    """Админ отклоняет оплату — участник выписывается."""
+    parts = callback.data.split("_")
+    event_id = int(parts[2])
+    user_id = int(parts[3])
+
+    remove_participant(event_id, user_id)
+    await callback.message.answer("❌ Участник выписан из события.")
+    await callback.answer()
