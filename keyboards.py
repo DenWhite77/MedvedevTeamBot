@@ -24,7 +24,7 @@ def get_cancel_keyboard():
 
 
 def get_skip_keyboard():
-    """Кнопка пропуска шага (например, для комментария)."""
+    """Кнопка пропуска шага."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⏭ Пропустить", callback_data="skip")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")],
