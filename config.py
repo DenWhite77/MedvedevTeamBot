@@ -27,5 +27,8 @@ GROUP_IDS = [
 ADMIN_IDS = [admin_id for admin_id in ADMIN_IDS if admin_id != 0]
 GROUP_IDS = [group_id for group_id in GROUP_IDS if group_id != 0]
 
+# Основная группа для публикаций (группа Леры)
+GROUP_ID = int(os.getenv("GROUP_ID_2", 0))
+
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден в .env!")
