@@ -4,6 +4,8 @@
 Содержит обработчики для администраторов:
 - Создание события (/new_event)
 - Отмена диалога (/cancel)
+- Публикация в топики (publish_event)
+- Отладка топиков (/topic_id)
 """
 import logging
 from aiogram import Router, types
@@ -34,15 +36,15 @@ router = Router()
 
 class NewEventStates(StatesGroup):
     """Состояния пошагового диалога создания события."""
-    direction = State()        # Направление
-    place = State()            # Место
-    date = State()             # Дата
-    time = State()             # Время
-    max_participants = State() # Макс. участников
-    price = State()            # Стоимость
-    payment_info = State()     # Способ оплаты
-    comment = State()          # Комментарий
-    confirm = State()          # Подтверждение
+    direction = State()
+    place = State()
+    date = State()
+    time = State()
+    max_participants = State()
+    price = State()
+    payment_info = State()
+    comment = State()
+    confirm = State()
 
 
 def is_admin(user_id: int) -> bool:
@@ -200,7 +202,6 @@ async def process_comment(message: Message, state: FSMContext):
     else:
         await state.update_data(comment=message.text)
 
-    # Показываем итог
     data = await state.get_data()
     summary = (
         f"📅 *Событие:*\n\n"
@@ -221,7 +222,6 @@ async def process_comment(message: Message, state: FSMContext):
         reply_markup=get_publish_keyboard()
     )
 
-    # Сохраняем событие в БД
     event_id = create_event(
         title=data['direction'],
         direction=data['direction'],
@@ -271,7 +271,6 @@ async def publish_event(callback: CallbackQuery, bot: Bot):
 @router.callback_query(F.data.startswith("topic_"))
 async def publish_to_topic(callback: CallbackQuery, bot: Bot):
     """Публикует событие в выбранный топик."""
-    # Получаем ключ топика
     topic_key = callback.data.replace("topic_", "")
     topic = TOPICS.get(topic_key)
 
@@ -279,7 +278,6 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
         await callback.answer("⚠️ Топик не найден.", show_alert=True)
         return
 
-    # Получаем последнее событие
     from db import get_all_events
     events = get_all_events()
     if not events:
@@ -289,7 +287,6 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
     event = events[-1]
     event_id = event[0]
 
-    # Формируем сообщение
     text = (
         f"📅 *{event[1]}*\n\n"
         f"📍 *Место:* {event[3]}\n"
@@ -302,7 +299,6 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
         f"Нажмите «✅ Я в деле», чтобы записаться!"
     )
 
-    # Отправляем в выбранный топик
     try:
         await bot.send_message(
             chat_id=GROUP_ID,
@@ -318,3 +314,14 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
         await callback.message.answer(f"❌ Ошибка при публикации: {e}")
 
     await callback.answer()
+
+
+@router.message(Command("topic_id"))
+async def get_topic_id(message: Message):
+    """Показывает message_thread_id текущего топика (для отладки)."""
+    thread_id = message.message_thread_id
+    await message.answer(
+        f"📌 message_thread_id: `{thread_id}`\n"
+        f"chat_id: `{message.chat.id}`",
+        parse_mode="Markdown"
+    )
