@@ -320,8 +320,8 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
 async def get_topic_id(message: Message):
     """Показывает message_thread_id текущего топика (для отладки)."""
     thread_id = message.message_thread_id
+    chat_id = message.chat.id
     await message.answer(
-        f"📌 message_thread_id: `{thread_id}`\n"
-        f"chat_id: `{message.chat.id}`",
-        parse_mode="Markdown"
+        f"📌 message_thread_id: {thread_id}\n"
+        f"chat_id: {chat_id}"
     )
