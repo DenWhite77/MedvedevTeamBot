@@ -382,3 +382,21 @@ async def reject_payment_handler(callback: CallbackQuery, bot: Bot):
     remove_participant(event_id, user_id)
     await callback.message.answer("❌ Участник выписан из события.")
     await callback.answer()
+
+
+@router.callback_query(F.data == "new_event")
+async def new_event_callback(callback: CallbackQuery, state: FSMContext):
+    """Старт создания события через кнопку."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав на это действие.", show_alert=True)
+        return
+
+    await state.clear()
+    await callback.message.answer(
+        "📅 Создание нового события.\n\n"
+        "Введите направление (например, «Волейбол классический»):\n"
+        "Или нажмите «Отмена» для выхода.",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(NewEventStates.direction)
+    await callback.answer()

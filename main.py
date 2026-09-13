@@ -7,10 +7,14 @@ import logging
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
+
 from config import BOT_TOKEN
+
 from db import init_db
+
 from handlers import admin, user
 
+from keyboards import get_main_menu
 
 logging.basicConfig(level=logging.INFO)
 
@@ -29,8 +33,9 @@ init_db()
 async def start(message: types.Message):
     await message.answer(
         f"Привет, {message.from_user.full_name}!\n"
-        "Я бот для организации спортивных событий.\n"
-        "Скоро здесь появятся команды для создания событий и записи."
+        "Я бот для организации спортивных событий.\n\n"
+        "Используйте кнопки ниже:",
+        reply_markup=get_main_menu()
     )
 
 
