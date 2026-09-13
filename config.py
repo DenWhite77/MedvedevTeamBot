@@ -37,7 +37,7 @@ if not BOT_TOKEN:
 # Топики группы Medvedev Volley Team
 # ============================================================
 TOPICS = {
-    "general": {"name": "📢 General", "thread_id": 1},
+    "general": {"name": "📢 General", "thread_id": None},
     "trainings": {"name": "🏐 Тренировки", "thread_id": 4357},
     "photo_video": {"name": "📸 Фото/видео", "thread_id": 4358},
     "flood": {"name": "💬 Флудилка", "thread_id": 4359},

@@ -300,13 +300,22 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
     )
 
     try:
-        await bot.send_message(
-            chat_id=GROUP_ID,
-            message_thread_id=topic["thread_id"],
-            text=text,
-            parse_mode="Markdown",
-            reply_markup=get_event_keyboard(event_id)
-        )
+        # Если топик General (thread_id = None), отправляем без message_thread_id
+        if topic["thread_id"] is None:
+            await bot.send_message(
+                chat_id=GROUP_ID,
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=get_event_keyboard(event_id)
+            )
+        else:
+            await bot.send_message(
+                chat_id=GROUP_ID,
+                message_thread_id=topic["thread_id"],
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=get_event_keyboard(event_id)
+            )
         await callback.message.answer(
             f"✅ Событие опубликовано в топик {topic['name']}!"
         )
