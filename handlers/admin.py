@@ -1,0 +1,240 @@
+"""
+Модуль handlers/admin.py
+
+Содержит обработчики для администраторов:
+- Создание события (/new_event)
+- Отмена диалога (/cancel)
+"""
+import logging
+from aiogram import Router, types
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import Message
+
+from config import ADMIN_IDS
+from db import create_event
+from keyboards import get_cancel_keyboard, get_skip_keyboard, get_main_menu
+
+logger = logging.getLogger(__name__)
+
+# Роутер для админов
+router = Router()
+
+
+class NewEventStates(StatesGroup):
+    """Состояния пошагового диалога создания события."""
+    direction = State()        # Направление
+    place = State()            # Место
+    date = State()             # Дата
+    time = State()             # Время
+    max_participants = State() # Макс. участников
+    price = State()            # Стоимость
+    payment_info = State()     # Способ оплаты
+    comment = State()          # Комментарий
+    confirm = State()          # Подтверждение
+
+
+def is_admin(user_id: int) -> bool:
+    """Проверяет, является ли пользователь админом."""
+    return user_id in ADMIN_IDS
+
+
+@router.message(Command("new_event"))
+async def new_event_start(message: Message, state: FSMContext):
+    """Старт создания события."""
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ У вас нет прав на это действие.")
+        return
+
+    await state.clear()
+    await message.answer(
+        "📅 Создание нового события.\n\n"
+        "Введите направление (например, «Волейбол классический»):\n"
+        "Или нажмите «Отмена» для выхода.",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(NewEventStates.direction)
+
+
+@router.message(NewEventStates.direction)
+async def process_direction(message: Message, state: FSMContext):
+    """Приём направления."""
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
+        return
+
+    await state.update_data(direction=message.text)
+    await message.answer(
+        "📍 Введите место проведения:",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(NewEventStates.place)
+
+
+@router.message(NewEventStates.place)
+async def process_place(message: Message, state: FSMContext):
+    """Приём места."""
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
+        return
+
+    await state.update_data(place=message.text)
+    await message.answer(
+        "📅 Введите дату (например, «17 сентября 2026»):",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(NewEventStates.date)
+
+
+@router.message(NewEventStates.date)
+async def process_date(message: Message, state: FSMContext):
+    """Приём даты."""
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
+        return
+
+    await state.update_data(date=message.text)
+    await message.answer(
+        "🕐 Введите время (например, «20:00–22:00»):",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(NewEventStates.time)
+
+
+@router.message(NewEventStates.time)
+async def process_time(message: Message, state: FSMContext):
+    """Приём времени."""
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
+        return
+
+    await state.update_data(time=message.text)
+    await message.answer(
+        "👥 Введите максимальное количество участников (число):",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(NewEventStates.max_participants)
+
+
+@router.message(NewEventStates.max_participants)
+async def process_max_participants(message: Message, state: FSMContext):
+    """Приём макс. участников."""
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
+        return
+
+    if not message.text.isdigit():
+        await message.answer("⚠️ Пожалуйста, введите число.")
+        return
+
+    await state.update_data(max_participants=int(message.text))
+    await message.answer(
+        "💰 Введите стоимость (число, например, «650»):",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(NewEventStates.price)
+
+
+@router.message(NewEventStates.price)
+async def process_price(message: Message, state: FSMContext):
+    """Приём стоимости."""
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
+        return
+
+    if not message.text.isdigit():
+        await message.answer("⚠️ Пожалуйста, введите число.")
+        return
+
+    await state.update_data(price=int(message.text))
+    await message.answer(
+        "💳 Введите способ оплаты (например, «Перевод на карту»):",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(NewEventStates.payment_info)
+
+
+@router.message(NewEventStates.payment_info)
+async def process_payment_info(message: Message, state: FSMContext):
+    """Приём способа оплаты."""
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
+        return
+
+    await state.update_data(payment_info=message.text)
+    await message.answer(
+        "📝 Введите комментарий (или нажмите «Пропустить»):",
+        reply_markup=get_skip_keyboard()
+    )
+    await state.set_state(NewEventStates.comment)
+
+
+@router.message(NewEventStates.comment)
+async def process_comment(message: Message, state: FSMContext):
+    """Приём комментария."""
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
+        return
+
+    if message.text == "⏭ Пропустить":
+        await state.update_data(comment="")
+    else:
+        await state.update_data(comment=message.text)
+
+    # Показываем итог
+    data = await state.get_data()
+    summary = (
+        f"📅 *Событие:*\n\n"
+        f"🏐 *Направление:* {data['direction']}\n"
+        f"📍 *Место:* {data['place']}\n"
+        f"📅 *Дата:* {data['date']}\n"
+        f"🕐 *Время:* {data['time']}\n"
+        f"👥 *Макс. участников:* {data['max_participants']}\n"
+        f"💰 *Стоимость:* {data['price']} ₽\n"
+        f"💳 *Оплата:* {data['payment_info']}\n"
+        f"📝 *Комментарий:* {data.get('comment', '—')}\n\n"
+        f"Всё верно? Нажмите «Опубликовать» или «Отмена»."
+    )
+
+    await message.answer(
+        summary,
+        parse_mode="Markdown",
+        reply_markup=get_cancel_keyboard()
+    )
+
+    # Сохраняем событие в БД
+    event_id = create_event(
+        title=data['direction'],
+        direction=data['direction'],
+        place=data['place'],
+        date=data['date'],
+        time=data['time'],
+        max_participants=data['max_participants'],
+        price=data['price'],
+        payment_info=data['payment_info'],
+        comment=data.get('comment', '')
+    )
+
+    await message.answer(
+        f"✅ Событие создано! ID: `{event_id}`.\n"
+        f"Теперь его можно опубликовать в группе.",
+        parse_mode="Markdown"
+    )
+
+    await state.clear()
+
+
+@router.message(Command("cancel"))
+async def cancel_handler(message: Message, state: FSMContext):
+    """Отмена любого диалога."""
+    await state.clear()
+    await message.answer("Действие отменено.", reply_markup=get_main_menu())

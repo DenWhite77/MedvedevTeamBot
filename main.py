@@ -9,12 +9,16 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from config import BOT_TOKEN
 from db import init_db
+from handlers import admin
 
 
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+# Регистрируем роутеры
+dp.include_router(admin.router)
 
 # Инициализация базы при старте
 init_db()
