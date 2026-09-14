@@ -38,7 +38,7 @@ def get_skip_keyboard():
 
 
 # ============================================================
-# Клавиатуры для админа
+# Клавиатура для админа
 # ============================================================
 
 def get_publish_keyboard():
@@ -59,6 +59,24 @@ def get_admin_event_keyboard(event_id):
     ])
     return keyboard
 
+def get_admin_list_keyboard(event_id, participants):
+    """Клавиатура со списком участников и кнопками выписки (для админа)."""
+    buttons = []
+    for p in participants:
+        user_id, username, full_name, status, paid = p
+        name = full_name or username or f"id{user_id}"
+        marker = "✅" if status == "main" else "🕐"
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"❌ Выписать {marker} {name}",
+                callback_data=f"remove_{event_id}_{user_id}"
+            )
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="🔙 Закрыть", callback_data="close_list")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 # ============================================================
 # Клавиатуры для участников
@@ -69,6 +87,7 @@ def get_event_keyboard(event_id):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Я в деле", callback_data=f"join_{event_id}")],
         [InlineKeyboardButton(text="💳 Оплатил", callback_data=f"paid_{event_id}")],
+        [InlineKeyboardButton(text="📋 Список участников", callback_data=f"list_{event_id}")],
         [InlineKeyboardButton(text="❌ Отменить запись", callback_data=f"cancel_{event_id}")],
     ])
     return keyboard
