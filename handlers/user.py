@@ -98,18 +98,18 @@ async def join_event(callback: CallbackQuery, bot: Bot):
     )
 
     if not success:
-        await callback.answer("⚠️ Ты уже записан на это событие!", show_alert=True)
+        await callback.answer("⚠️ Вы уже записаны на это событие!", show_alert=True)
         return
 
     # Отвечаем участнику
-    await callback.answer("✅ Ты записан в резерв!")
+    await callback.answer("✅ Вы записаны в резерв!")
 
     # Отправляем личное сообщение участнику
     try:
         await bot.send_message(
             chat_id=user.id,
             text=(
-                f"✅ Ты записан на событие *{event[1]}*!\n\n"
+                f"✅ Вы записаны на событие *{event[1]}*!\n\n"
                 f"📅 {event[4]} в {event[5]}\n"
                 f"📍 {event[3]}\n"
                 f"💰 Стоимость: {event[7]} ₽\n\n"
