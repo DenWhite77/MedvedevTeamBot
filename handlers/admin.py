@@ -6,6 +6,7 @@
 - Отмена диалога (/cancel)
 - Публикация в топики (publish_event)
 - Отладка топиков (/topic_id)
+- Выписка участников (list_, remove_)
 """
 import logging
 from aiogram import Router, types
@@ -23,10 +24,10 @@ from config import TOPICS
 
 from db import create_event
 from db import get_event
-from db import confirm_payment, remove_participant
+from db import confirm_payment, remove_participant, get_participants
 
 from keyboards import get_cancel_keyboard, get_skip_keyboard, get_main_menu
-from keyboards import get_publish_keyboard, get_event_keyboard
+from keyboards import get_publish_keyboard, get_event_keyboard, get_admin_list_keyboard
 from keyboards import get_topics_keyboard
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,10 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 
+# ============================================================
+# СОЗДАНИЕ СОБЫТИЯ
+# ============================================================
+
 @router.message(Command("new_event"))
 async def new_event_start(message: Message, state: FSMContext):
     """Старт создания события."""
@@ -68,6 +73,24 @@ async def new_event_start(message: Message, state: FSMContext):
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(NewEventStates.direction)
+
+
+@router.callback_query(F.data == "new_event")
+async def new_event_callback(callback: CallbackQuery, state: FSMContext):
+    """Старт создания события через кнопку."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав на это действие.", show_alert=True)
+        return
+
+    await state.clear()
+    await callback.message.answer(
+        "📅 Создание нового события.\n\n"
+        "Введите направление (например, «Волейбол классический»):\n"
+        "Или нажмите «Отмена» для выхода.",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(NewEventStates.direction)
+    await callback.answer()
 
 
 @router.message(NewEventStates.direction)
@@ -251,6 +274,10 @@ async def cancel_handler(message: Message, state: FSMContext):
     await message.answer("Действие отменено.", reply_markup=get_main_menu())
 
 
+# ============================================================
+# ПУБЛИКАЦИЯ В ТОПИКИ
+# ============================================================
+
 @router.callback_query(F.data == "publish_event")
 async def publish_event(callback: CallbackQuery, bot: Bot):
     """Показывает выбор топика для публикации."""
@@ -301,7 +328,6 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
     )
 
     try:
-        # Если топик General (thread_id = None), отправляем без message_thread_id
         if topic["thread_id"] is None:
             await bot.send_message(
                 chat_id=GROUP_ID,
@@ -337,6 +363,10 @@ async def get_topic_id(message: Message):
     )
 
 
+# ============================================================
+# ПОДТВЕРЖДЕНИЕ / ОТКЛОНЕНИЕ ОПЛАТЫ
+# ============================================================
+
 @router.callback_query(F.data.startswith("confirm_payment_"))
 async def confirm_payment_handler(callback: CallbackQuery, bot: Bot):
     """Админ подтверждает оплату — участник переходит в основной состав."""
@@ -344,12 +374,9 @@ async def confirm_payment_handler(callback: CallbackQuery, bot: Bot):
     event_id = int(parts[2])
     user_id = int(parts[3])
 
-    # Подтверждаем оплату в БД
     confirm_payment(event_id, user_id)
-
     await callback.message.answer("✅ Оплата подтверждена!")
 
-    # Обновляем сообщение в группе
     from db import get_event, get_participants
     from handlers.user import format_event_message
     event = get_event(event_id)
@@ -357,8 +384,6 @@ async def confirm_payment_handler(callback: CallbackQuery, bot: Bot):
     new_text = format_event_message(event, participants)
 
     try:
-        # Находим сообщение с событием в группе (по ID из уведомления)
-        # Проще всего — отправить новое сообщение в тот же топик
         await bot.send_message(
             chat_id=GROUP_ID,
             message_thread_id=callback.message.message_thread_id,
@@ -384,19 +409,82 @@ async def reject_payment_handler(callback: CallbackQuery, bot: Bot):
     await callback.answer()
 
 
-@router.callback_query(F.data == "new_event")
-async def new_event_callback(callback: CallbackQuery, state: FSMContext):
-    """Старт создания события через кнопку."""
+# ============================================================
+# СПИСОК УЧАСТНИКОВ И ВЫПИСКА
+# ============================================================
+
+@router.callback_query(F.data.startswith("list_"))
+async def list_participants(callback: CallbackQuery, bot: Bot):
+    """Показывает админу список участников с кнопками выписки."""
+    event_id = int(callback.data.split("_")[1])
+
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ У вас нет прав на это действие.", show_alert=True)
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
         return
 
-    await state.clear()
+    event = get_event(event_id)
+    if not event:
+        await callback.answer("⚠️ Событие не найдено.", show_alert=True)
+        return
+
+    participants = get_participants(event_id)
+    if not participants:
+        await callback.answer("⚠️ Пока никто не записался.", show_alert=True)
+        return
+
     await callback.message.answer(
-        "📅 Создание нового события.\n\n"
-        "Введите направление (например, «Волейбол классический»):\n"
-        "Или нажмите «Отмена» для выхода.",
-        reply_markup=get_cancel_keyboard()
+        f"📋 *Список участников события:*\n"
+        f"📅 {event[1]}\n\n"
+        f"Нажмите «❌ Выписать», чтобы удалить участника.",
+        parse_mode="Markdown",
+        reply_markup=get_admin_list_keyboard(event_id, participants)
     )
-    await state.set_state(NewEventStates.direction)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("remove_"))
+async def remove_participant_handler(callback: CallbackQuery, bot: Bot):
+    """Админ выписывает участника."""
+    parts = callback.data.split("_")
+    event_id = int(parts[1])
+    user_id = int(parts[2])
+
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    event = get_event(event_id)
+    if not event:
+        await callback.answer("⚠️ Событие не найдено.", show_alert=True)
+        return
+
+    remove_participant(event_id, user_id)
+    await callback.answer("✅ Участник выписан.")
+
+    from handlers.user import format_event_message
+    participants = get_participants(event_id)
+    new_text = format_event_message(event, participants)
+
+    try:
+        await bot.send_message(
+            chat_id=GROUP_ID,
+            message_thread_id=callback.message.message_thread_id,
+            text=new_text,
+            parse_mode="Markdown",
+            reply_markup=get_event_keyboard(event_id)
+        )
+    except Exception as e:
+        logger.warning(f"Не удалось обновить сообщение в группе: {e}")
+
+    try:
+        await callback.message.edit_text(
+            text=(
+                f"📋 *Список участников события:*\n"
+                f"📅 {event[1]}\n\n"
+                f"Нажмите «❌ Выписать», чтобы удалить участника."
+            ),
+            parse_mode="Markdown",
+            reply_markup=get_admin_list_keyboard(event_id, participants)
+        )
+    except Exception as e:
+        logger.warning(f"Не удалось обновить список: {e}")
