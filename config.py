@@ -2,7 +2,7 @@
 Модуль config.py
 
 Загружает переменные окружения из файла .env.
-Содержит токен бота, список админов и ID групп.
+Поддерживает переключение между тестовой и рабочей группами.
 """
 import os
 from dotenv import load_dotenv
@@ -16,30 +16,32 @@ ADMIN_IDS = [
     int(os.getenv("ADMIN_ID", 0)),
     int(os.getenv("ADMIN_ID_2", 0)),
 ]
-
-# Список групп
-GROUP_IDS = [
-    int(os.getenv("GROUP_ID", 0)),
-    int(os.getenv("GROUP_ID_2", 0)),
-]
-
-# Убираем нули
 ADMIN_IDS = [admin_id for admin_id in ADMIN_IDS if admin_id != 0]
-GROUP_IDS = [group_id for group_id in GROUP_IDS if group_id != 0]
-
-# Основная группа для публикаций (группа Леры)
-GROUP_ID = int(os.getenv("GROUP_ID", 0))
-
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN не найден в .env!")
 
 # ============================================================
-# Топики группы Medvedev Volley Team
+# РЕЖИМ: тест или прод
 # ============================================================
-TOPICS = {
-    "general": {"name": "📢 General", "thread_id": None},
-    "trainings": {"name": "🏐 Тренировки", "thread_id": 4357},
-    "photo_video": {"name": "📸 Фото/видео", "thread_id": 4358},
-    "flood": {"name": "💬 Флудилка", "thread_id": 4359},
-    "camps": {"name": "🏕 Кемпы и турниры", "thread_id": 4559},
-}
+TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
+
+# Сначала определяем значения по умолчанию
+GROUP_ID = 0
+TOPICS = {}
+
+if TEST_MODE:
+    GROUP_ID = int(os.getenv("GROUP_ID_TEST", 0))
+    TOPICS = {
+        "general": {"name": "📢 General", "thread_id": None},
+        "trainings": {"name": "🏐 Тренировки", "thread_id": 2},
+        "photo_video": {"name": "📸 Фото/видео", "thread_id": 3},
+        "flood": {"name": "💬 Флудилка", "thread_id": 4},
+        "camps": {"name": "🏕 Кемпы", "thread_id": 5},
+    }
+else:
+    GROUP_ID = int(os.getenv("GROUP_ID", 0))
+    TOPICS = {
+        "general": {"name": "📢 General", "thread_id": None},
+        "trainings": {"name": "🏐 Тренировки", "thread_id": 4357},
+        "photo_video": {"name": "📸 Фото/видео", "thread_id": 4358},
+        "flood": {"name": "💬 Флудилка", "thread_id": 4359},
+        "camps": {"name": "🏕 Кемпы и турниры", "thread_id": 4559},
+    }
