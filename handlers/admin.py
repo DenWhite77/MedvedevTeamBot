@@ -508,3 +508,56 @@ async def remove_participant_handler(callback: CallbackQuery, bot: Bot):
         )
     except Exception as e:
         logger.warning(f"Не удалось обновить список: {e}")
+
+
+@router.callback_query(F.data == "skip")
+async def skip_comment(callback: CallbackQuery, state: FSMContext):
+    """Пропуск шага комментария."""
+    current_state = await state.get_state()
+
+    if current_state == NewEventStates.comment:
+        await state.update_data(comment="")
+
+        data = await state.get_data()
+        summary = (
+            f"📅 *Событие:*\n\n"
+            f"🏐 *Направление:* {data['direction']}\n"
+            f"📍 *Место:* {data['place']}\n"
+            f"📅 *Дата:* {data['date']}\n"
+            f"🕐 *Время:* {data['time']}\n"
+            f"👥 *Макс. участников:* {data['max_participants']}\n"
+            f"💰 *Стоимость:* {data['price']} ₽\n"
+            f"💳 *Оплата:* {data['payment_info']}\n"
+            f"📝 *Комментарий:* —\n\n"
+            f"Всё верно? Нажмите «Опубликовать» или «Отмена»."
+        )
+
+        # Создаём событие
+        event_id = create_event(
+            title=data['direction'],
+            direction=data['direction'],
+            place=data['place'],
+            date=data['date'],
+            time=data['time'],
+            max_participants=data['max_participants'],
+            price=data['price'],
+            payment_info=data['payment_info'],
+            comment=""
+        )
+
+        await callback.message.answer(
+            summary,
+            parse_mode="Markdown",
+            reply_markup=get_publish_keyboard(event_id)
+        )
+
+        await callback.message.answer(
+            f"✅ Событие создано! ID: `{event_id}`.\n"
+            f"Теперь его можно опубликовать в группе.",
+            parse_mode="Markdown"
+        )
+
+        await state.clear()
+        await callback.answer()
+    else:
+        await callback.answer("⚠️ Кнопка доступна только на шаге комментария.", show_alert=True)
