@@ -395,7 +395,7 @@ async def confirm_payment_handler(callback: CallbackQuery, bot: Bot):
     new_text = format_event_message(event, participants)
 
     # Берём message_id из БД
-    message_id = event[13] if len(event) > 13 else None
+    message_id = event[14] if len(event) > 14 else None
 
     if message_id:
         try:
@@ -481,7 +481,7 @@ async def remove_participant_handler(callback: CallbackQuery, bot: Bot):
     new_text = format_event_message(event, participants)
 
     # Берём message_id из БД
-    message_id = event[13] if len(event) > 13 else None
+    message_id = event[14] if len(event) > 14 else None
 
     if message_id:
         try:
