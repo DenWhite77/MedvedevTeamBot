@@ -36,6 +36,9 @@ def init_db():
                 payment_info TEXT,
                 comment TEXT,
                 status TEXT DEFAULT 'active',
+                published INTEGER DEFAULT 0,
+                thread_id INTEGER,
+                message_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
@@ -87,6 +90,27 @@ def get_all_events():
         return cursor.fetchall()
 
 
+def mark_event_published(event_id, thread_id, message_id):
+    """Помечает событие как опубликованное + сохраняет thread_id и message_id."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE events
+            SET published = 1, thread_id = ?, message_id = ?
+            WHERE id = ?
+        """, (thread_id, message_id, event_id))
+        conn.commit()
+
+
+def is_event_published(event_id):
+    """Проверяет, опубликовано ли событие."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT published FROM events WHERE id = ?", (event_id,))
+        row = cursor.fetchone()
+        return row and row[0] == 1
+
+
 def add_participant(event_id, user_id, username, full_name):
     """Добавляет участника в резерв."""
     with get_connection() as conn:
@@ -114,7 +138,7 @@ def mark_paid(event_id, user_id):
 
 
 def confirm_payment(event_id, user_id):
-    """Админ подтверждает оплату и переводит участника в основной состав."""
+    """Админ подтверждает оплату — участник в основной состав."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -146,7 +170,7 @@ def remove_participant(event_id, user_id):
 
 
 def add_to_main(event_id, user_id):
-    """Вручную добавляет участника в основной состав (для админа)."""
+    """Вручную добавляет участника в основной состав."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""

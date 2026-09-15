@@ -25,6 +25,7 @@ from config import TOPICS
 from db import create_event
 from db import get_event
 from db import confirm_payment, remove_participant, get_participants
+from db import mark_event_published, is_event_published
 
 from keyboards import get_cancel_keyboard, get_skip_keyboard, get_main_menu
 from keyboards import get_publish_keyboard, get_event_keyboard, get_admin_list_keyboard
@@ -240,12 +241,7 @@ async def process_comment(message: Message, state: FSMContext):
         f"Всё верно? Нажмите «Опубликовать» или «Отмена»."
     )
 
-    await message.answer(
-        summary,
-        parse_mode="Markdown",
-        reply_markup=get_publish_keyboard()
-    )
-
+    # СНАЧАЛА создаём событие, чтобы получить event_id
     event_id = create_event(
         title=data['direction'],
         direction=data['direction'],
@@ -256,6 +252,13 @@ async def process_comment(message: Message, state: FSMContext):
         price=data['price'],
         payment_info=data['payment_info'],
         comment=data.get('comment', '')
+    )
+
+    # ПОТОМ показываем итог с кнопкой, которая знает event_id
+    await message.answer(
+        summary,
+        parse_mode="Markdown",
+        reply_markup=get_publish_keyboard(event_id)
     )
 
     await message.answer(
@@ -278,20 +281,15 @@ async def cancel_handler(message: Message, state: FSMContext):
 # ПУБЛИКАЦИЯ В ТОПИКИ
 # ============================================================
 
-@router.callback_query(F.data == "publish_event")
+@router.callback_query(F.data.startswith("publish_event_"))
 async def publish_event(callback: CallbackQuery, bot: Bot):
     """Показывает выбор топика для публикации."""
-    from db import get_all_events
-    events = get_all_events()
-    if not events:
-        await callback.message.answer("⚠️ Нет событий для публикации.")
-        await callback.answer()
-        return
+    event_id = int(callback.data.split("_")[2])
 
     await callback.message.answer(
         "📤 Куда опубликовать событие?\n\n"
         "Выберите топик:",
-        reply_markup=get_topics_keyboard()
+        reply_markup=get_topics_keyboard(event_id)
     )
     await callback.answer()
 
@@ -299,21 +297,24 @@ async def publish_event(callback: CallbackQuery, bot: Bot):
 @router.callback_query(F.data.startswith("topic_"))
 async def publish_to_topic(callback: CallbackQuery, bot: Bot):
     """Публикует событие в выбранный топик."""
-    topic_key = callback.data.replace("topic_", "")
-    topic = TOPICS.get(topic_key)
+    parts = callback.data.split("_")
+    topic_key = parts[1]
+    event_id = int(parts[2])
 
+    topic = TOPICS.get(topic_key)
     if not topic:
         await callback.answer("⚠️ Топик не найден.", show_alert=True)
         return
 
-    from db import get_all_events
-    events = get_all_events()
-    if not events:
-        await callback.answer("⚠️ Нет событий для публикации.", show_alert=True)
+    # Проверяем, не опубликовано ли уже
+    if is_event_published(event_id):
+        await callback.answer("⚠️ Это событие уже опубликовано!", show_alert=True)
         return
 
-    event = events[-1]
-    event_id = event[0]
+    event = get_event(event_id)
+    if not event:
+        await callback.answer("⚠️ Событие не найдено.", show_alert=True)
+        return
 
     text = (
         f"📅 *{event[1]}*\n\n"
@@ -329,23 +330,34 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
 
     try:
         if topic["thread_id"] is None:
-            await bot.send_message(
+            sent = await bot.send_message(
                 chat_id=GROUP_ID,
                 text=text,
                 parse_mode="Markdown",
                 reply_markup=get_event_keyboard(event_id)
             )
         else:
-            await bot.send_message(
+            sent = await bot.send_message(
                 chat_id=GROUP_ID,
                 message_thread_id=topic["thread_id"],
                 text=text,
                 parse_mode="Markdown",
                 reply_markup=get_event_keyboard(event_id)
             )
+
+        # Сохраняем thread_id и message_id в БД
+        mark_event_published(event_id, topic["thread_id"], sent.message_id)
+
         await callback.message.answer(
             f"✅ Событие опубликовано в топик {topic['name']}!"
         )
+
+        # Убираем кнопку «Опубликовать» из сообщения с итогом
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception as e:
+            logger.warning(f"Не удалось убрать кнопку: {e}")
+
     except Exception as e:
         await callback.message.answer(f"❌ Ошибка при публикации: {e}")
 
@@ -377,22 +389,25 @@ async def confirm_payment_handler(callback: CallbackQuery, bot: Bot):
     confirm_payment(event_id, user_id)
     await callback.message.answer("✅ Оплата подтверждена!")
 
-    from db import get_event, get_participants
     from handlers.user import format_event_message
     event = get_event(event_id)
     participants = get_participants(event_id)
     new_text = format_event_message(event, participants)
 
-    try:
-        await bot.send_message(
-            chat_id=GROUP_ID,
-            message_thread_id=callback.message.message_thread_id,
-            text=new_text,
-            parse_mode="Markdown",
-            reply_markup=get_event_keyboard(event_id)
-        )
-    except Exception as e:
-        logger.warning(f"Не удалось обновить сообщение в группе: {e}")
+    # Берём message_id из БД
+    message_id = event[13] if len(event) > 13 else None
+
+    if message_id:
+        try:
+            await bot.edit_message_text(
+                chat_id=GROUP_ID,
+                message_id=message_id,
+                text=new_text,
+                parse_mode="Markdown",
+                reply_markup=get_event_keyboard(event_id)
+            )
+        except Exception as e:
+            logger.warning(f"Не удалось отредактировать сообщение: {e}")
 
     await callback.answer()
 
@@ -465,17 +480,22 @@ async def remove_participant_handler(callback: CallbackQuery, bot: Bot):
     participants = get_participants(event_id)
     new_text = format_event_message(event, participants)
 
-    try:
-        await bot.send_message(
-            chat_id=GROUP_ID,
-            message_thread_id=callback.message.message_thread_id,
-            text=new_text,
-            parse_mode="Markdown",
-            reply_markup=get_event_keyboard(event_id)
-        )
-    except Exception as e:
-        logger.warning(f"Не удалось обновить сообщение в группе: {e}")
+    # Берём message_id из БД
+    message_id = event[13] if len(event) > 13 else None
 
+    if message_id:
+        try:
+            await bot.edit_message_text(
+                chat_id=GROUP_ID,
+                message_id=message_id,
+                text=new_text,
+                parse_mode="Markdown",
+                reply_markup=get_event_keyboard(event_id)
+            )
+        except Exception as e:
+            logger.warning(f"Не удалось отредактировать сообщение: {e}")
+
+    # Обновляем список участников в личке админа
     try:
         await callback.message.edit_text(
             text=(

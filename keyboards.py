@@ -38,13 +38,16 @@ def get_skip_keyboard():
 
 
 # ============================================================
-# Клавиатура для админа
+# Клавиатуры для админа
 # ============================================================
 
-def get_publish_keyboard():
-    """Кнопка публикации события."""
+def get_publish_keyboard(event_id):
+    """Кнопка публикации события (с ID события)."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📤 Опубликовать в группу", callback_data="publish_event")],
+        [InlineKeyboardButton(
+            text="📤 Опубликовать в группу",
+            callback_data=f"publish_event_{event_id}"
+        )],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")],
     ])
     return keyboard
@@ -58,6 +61,7 @@ def get_admin_event_keyboard(event_id):
         [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_{event_id}")],
     ])
     return keyboard
+
 
 def get_admin_list_keyboard(event_id, participants):
     """Клавиатура со списком участников и кнопками выписки (для админа)."""
@@ -83,24 +87,23 @@ def get_admin_list_keyboard(event_id, participants):
 # ============================================================
 
 def get_event_keyboard(event_id):
-    """Кнопки для участников под событием."""
+    """Кнопки для участников под событием (без кнопки Список участников)."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Я в деле", callback_data=f"join_{event_id}")],
         [InlineKeyboardButton(text="💳 Оплатил", callback_data=f"paid_{event_id}")],
-        [InlineKeyboardButton(text="📋 Список участников", callback_data=f"list_{event_id}")],
         [InlineKeyboardButton(text="❌ Отменить запись", callback_data=f"cancel_{event_id}")],
     ])
     return keyboard
 
 
-def get_topics_keyboard():
-    """Клавиатура с выбором топика для публикации."""
+def get_topics_keyboard(event_id):
+    """Клавиатура с выбором топика для публикации (с ID события)."""
     buttons = []
     for key, topic in TOPICS.items():
         buttons.append([
             InlineKeyboardButton(
                 text=topic["name"],
-                callback_data=f"topic_{key}"
+                callback_data=f"topic_{key}_{event_id}"
             )
         ])
     buttons.append([
