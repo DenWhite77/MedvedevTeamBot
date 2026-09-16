@@ -7,6 +7,8 @@
 - Публикация в топики (publish_event)
 - Отладка топиков (/topic_id)
 - Выписка участников (list_, remove_)
+- Отмена через inline-кнопку (cancel)
+- Пропуск комментария (skip)
 """
 import logging
 from aiogram import Router, types
@@ -97,11 +99,6 @@ async def new_event_callback(callback: CallbackQuery, state: FSMContext):
 @router.message(NewEventStates.direction)
 async def process_direction(message: Message, state: FSMContext):
     """Приём направления."""
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
-        return
-
     await state.update_data(direction=message.text)
     await message.answer(
         "📍 Введите место проведения:",
@@ -113,11 +110,6 @@ async def process_direction(message: Message, state: FSMContext):
 @router.message(NewEventStates.place)
 async def process_place(message: Message, state: FSMContext):
     """Приём места."""
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
-        return
-
     await state.update_data(place=message.text)
     await message.answer(
         "📅 Введите дату (например, «17 сентября 2026»):",
@@ -129,11 +121,6 @@ async def process_place(message: Message, state: FSMContext):
 @router.message(NewEventStates.date)
 async def process_date(message: Message, state: FSMContext):
     """Приём даты."""
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
-        return
-
     await state.update_data(date=message.text)
     await message.answer(
         "🕐 Введите время (например, «20:00–22:00»):",
@@ -145,11 +132,6 @@ async def process_date(message: Message, state: FSMContext):
 @router.message(NewEventStates.time)
 async def process_time(message: Message, state: FSMContext):
     """Приём времени."""
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
-        return
-
     await state.update_data(time=message.text)
     await message.answer(
         "👥 Введите максимальное количество участников (число):",
@@ -161,11 +143,6 @@ async def process_time(message: Message, state: FSMContext):
 @router.message(NewEventStates.max_participants)
 async def process_max_participants(message: Message, state: FSMContext):
     """Приём макс. участников."""
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
-        return
-
     if not message.text.isdigit():
         await message.answer("⚠️ Пожалуйста, введите число.")
         return
@@ -181,11 +158,6 @@ async def process_max_participants(message: Message, state: FSMContext):
 @router.message(NewEventStates.price)
 async def process_price(message: Message, state: FSMContext):
     """Приём стоимости."""
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
-        return
-
     if not message.text.isdigit():
         await message.answer("⚠️ Пожалуйста, введите число.")
         return
@@ -201,11 +173,6 @@ async def process_price(message: Message, state: FSMContext):
 @router.message(NewEventStates.payment_info)
 async def process_payment_info(message: Message, state: FSMContext):
     """Приём способа оплаты."""
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
-        return
-
     await state.update_data(payment_info=message.text)
     await message.answer(
         "📝 Введите комментарий (или нажмите «Пропустить»):",
@@ -217,11 +184,6 @@ async def process_payment_info(message: Message, state: FSMContext):
 @router.message(NewEventStates.comment)
 async def process_comment(message: Message, state: FSMContext):
     """Приём комментария."""
-    if message.text == "❌ Отмена":
-        await state.clear()
-        await message.answer("Создание события отменено.", reply_markup=get_main_menu())
-        return
-
     if message.text == "⏭ Пропустить":
         await state.update_data(comment="")
     else:
@@ -272,9 +234,72 @@ async def process_comment(message: Message, state: FSMContext):
 
 @router.message(Command("cancel"))
 async def cancel_handler(message: Message, state: FSMContext):
-    """Отмена любого диалога."""
+    """Отмена любого диалога через команду."""
     await state.clear()
     await message.answer("Действие отменено.", reply_markup=get_main_menu())
+
+
+@router.callback_query(F.data == "skip")
+async def skip_comment(callback: CallbackQuery, state: FSMContext):
+    """Пропуск шага комментария через inline-кнопку."""
+    current_state = await state.get_state()
+
+    if current_state == NewEventStates.comment:
+        await state.update_data(comment="")
+
+        data = await state.get_data()
+        summary = (
+            f"📅 *Событие:*\n\n"
+            f"🏐 *Направление:* {data['direction']}\n"
+            f"📍 *Место:* {data['place']}\n"
+            f"📅 *Дата:* {data['date']}\n"
+            f"🕐 *Время:* {data['time']}\n"
+            f"👥 *Макс. участников:* {data['max_participants']}\n"
+            f"💰 *Стоимость:* {data['price']} ₽\n"
+            f"💳 *Оплата:* {data['payment_info']}\n"
+            f"📝 *Комментарий:* —\n\n"
+            f"Всё верно? Нажмите «Опубликовать» или «Отмена»."
+        )
+
+        event_id = create_event(
+            title=data['direction'],
+            direction=data['direction'],
+            place=data['place'],
+            date=data['date'],
+            time=data['time'],
+            max_participants=data['max_participants'],
+            price=data['price'],
+            payment_info=data['payment_info'],
+            comment=""
+        )
+
+        await callback.message.answer(
+            summary,
+            parse_mode="Markdown",
+            reply_markup=get_publish_keyboard(event_id)
+        )
+
+        await callback.message.answer(
+            f"✅ Событие создано! ID: `{event_id}`.\n"
+            f"Теперь его можно опубликовать в группе.",
+            parse_mode="Markdown"
+        )
+
+        await state.clear()
+        await callback.answer()
+    else:
+        await callback.answer("⚠️ Кнопка доступна только на шаге комментария.", show_alert=True)
+
+
+@router.callback_query(F.data == "cancel")
+async def cancel_callback(callback: CallbackQuery, state: FSMContext):
+    """Отмена диалога через inline-кнопку."""
+    await state.clear()
+    await callback.message.answer(
+        "Действие отменено.",
+        reply_markup=get_main_menu()
+    )
+    await callback.answer()
 
 
 # ============================================================
@@ -508,56 +533,3 @@ async def remove_participant_handler(callback: CallbackQuery, bot: Bot):
         )
     except Exception as e:
         logger.warning(f"Не удалось обновить список: {e}")
-
-
-@router.callback_query(F.data == "skip")
-async def skip_comment(callback: CallbackQuery, state: FSMContext):
-    """Пропуск шага комментария."""
-    current_state = await state.get_state()
-
-    if current_state == NewEventStates.comment:
-        await state.update_data(comment="")
-
-        data = await state.get_data()
-        summary = (
-            f"📅 *Событие:*\n\n"
-            f"🏐 *Направление:* {data['direction']}\n"
-            f"📍 *Место:* {data['place']}\n"
-            f"📅 *Дата:* {data['date']}\n"
-            f"🕐 *Время:* {data['time']}\n"
-            f"👥 *Макс. участников:* {data['max_participants']}\n"
-            f"💰 *Стоимость:* {data['price']} ₽\n"
-            f"💳 *Оплата:* {data['payment_info']}\n"
-            f"📝 *Комментарий:* —\n\n"
-            f"Всё верно? Нажмите «Опубликовать» или «Отмена»."
-        )
-
-        # Создаём событие
-        event_id = create_event(
-            title=data['direction'],
-            direction=data['direction'],
-            place=data['place'],
-            date=data['date'],
-            time=data['time'],
-            max_participants=data['max_participants'],
-            price=data['price'],
-            payment_info=data['payment_info'],
-            comment=""
-        )
-
-        await callback.message.answer(
-            summary,
-            parse_mode="Markdown",
-            reply_markup=get_publish_keyboard(event_id)
-        )
-
-        await callback.message.answer(
-            f"✅ Событие создано! ID: `{event_id}`.\n"
-            f"Теперь его можно опубликовать в группе.",
-            parse_mode="Markdown"
-        )
-
-        await state.clear()
-        await callback.answer()
-    else:
-        await callback.answer("⚠️ Кнопка доступна только на шаге комментария.", show_alert=True)

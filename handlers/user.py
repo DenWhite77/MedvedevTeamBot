@@ -11,7 +11,7 @@ from aiogram import Router, types, F, Bot
 from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from config import ADMIN_IDS
+from config import ADMIN_IDS, GROUP_ID
 
 from db import get_event, add_participant, get_participants, remove_participant
 from db import mark_paid
@@ -113,7 +113,7 @@ async def join_event(callback: CallbackQuery, bot: Bot):
                 f"📅 {event[4]} в {event[5]}\n"
                 f"📍 {event[3]}\n"
                 f"💰 Стоимость: {event[7]} ₽\n\n"
-                f"После оплаты нажми «💳 Оплатил» в сообщении группы."
+                f"После оплаты нажмите «💳 Оплатил» в сообщении группы."
             ),
             parse_mode="Markdown"
         )
@@ -152,7 +152,7 @@ async def paid_event(callback: CallbackQuery, bot: Bot):
     user = callback.from_user
     if user.id not in user_ids:
         await callback.answer(
-            "⚠️ Сначала нажми «✅ Я в деле», чтобы записаться!",
+            "⚠️ Сначала нажмите «✅ Я в деле», чтобы записаться!",
             show_alert=True
         )
         return
@@ -179,3 +179,57 @@ async def paid_event(callback: CallbackQuery, bot: Bot):
             )
         except Exception as e:
             logger.warning(f"Не удалось отправить уведомление админу {admin_id}: {e}")
+
+
+@router.callback_query(F.data.startswith("cancel_"))
+async def cancel_event(callback: CallbackQuery, bot: Bot):
+    """Отмена записи участником."""
+    event_id = int(callback.data.split("_")[1])
+
+    event = get_event(event_id)
+    if not event:
+        await callback.answer("⚠️ Событие не найдено.", show_alert=True)
+        return
+
+    user = callback.from_user
+    participants = get_participants(event_id)
+    user_ids = [p[0] for p in participants]
+
+    if user.id not in user_ids:
+        await callback.answer("⚠️ Вы не записаны на это событие.", show_alert=True)
+        return
+
+    remove_participant(event_id, user.id)
+    await callback.answer("✅ Вы отменили запись.")
+
+    # Отправляем ЛС участнику
+    try:
+        await bot.send_message(
+            chat_id=user.id,
+            text=(
+                f"❌ Вы отменили запись на событие *{event[1]}*.\n\n"
+                f"📅 {event[4]} в {event[5]}\n"
+                f"📍 {event[3]}"
+            ),
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.warning(f"Не удалось отправить ЛС: {e}")
+
+    # Обновляем сообщение в группе
+    participants = get_participants(event_id)
+    new_text = format_event_message(event, participants)
+
+    message_id = event[14] if len(event) > 14 else None
+
+    if message_id:
+        try:
+            await bot.edit_message_text(
+                chat_id=GROUP_ID,
+                message_id=message_id,
+                text=new_text,
+                parse_mode="Markdown",
+                reply_markup=get_event_keyboard(event_id)
+            )
+        except Exception as e:
+            logger.warning(f"Не удалось обновить сообщение: {e}")
