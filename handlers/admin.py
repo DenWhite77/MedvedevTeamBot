@@ -19,6 +19,7 @@ from aiogram.types import Message
 from aiogram import Bot
 from aiogram import F
 from aiogram.types import CallbackQuery
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import ADMIN_IDS
 from config import GROUP_ID
@@ -550,12 +551,86 @@ async def edit_event_list(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data == "delete_event_list")
 async def delete_event_list(callback: CallbackQuery, bot: Bot):
-    """Показывает список событий для удаления (заглушка)."""
+    """Показывает список событий для удаления."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ У вас нет прав.", show_alert=True)
         return
 
+    from db import get_all_events
+    events = get_all_events()
+    if not events:
+        await callback.message.answer("⚠️ Нет активных событий.")
+        await callback.answer()
+        return
+
+    buttons = []
+    for event in events:
+        event_id = event[0]
+        title = event[1]
+        date = event[4]
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"🗑 {title} — {date}",
+                callback_data=f"delete_{event_id}"
+            )
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="🔙 Закрыть", callback_data="close_list")
+    ])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback.message.answer(
-        "🗑 Удаление событий — функция в разработке."
+        "🗑 *Выберите событие для удаления:*",
+        parse_mode="Markdown",
+        reply_markup=keyboard
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("delete_"))
+async def delete_event(callback: CallbackQuery, bot: Bot):
+    """Удаляет событие из БД и сообщение из группы."""
+    event_id = int(callback.data.split("_")[1])
+
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    event = get_event(event_id)
+    if not event:
+        await callback.answer("⚠️ Событие не найдено.", show_alert=True)
+        return
+
+    # Удаляем сообщение из группы
+    message_id = event[14] if len(event) > 14 else None
+    thread_id = event[13] if len(event) > 13 else None
+
+    if message_id:
+        try:
+            await bot.delete_message(
+                chat_id=GROUP_ID,
+                message_id=message_id
+            )
+            logger.info(f"Сообщение {message_id} удалено из группы.")
+        except Exception as e:
+            logger.warning(f"Не удалось удалить сообщение из группы: {e}")
+
+    # Удаляем из БД
+    from db import get_connection
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM events WHERE id = ?", (event_id,))
+        conn.commit()
+
+    await callback.message.answer(f"🗑 Событие ID={event_id} удалено.")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "close_list")
+async def close_list(callback: CallbackQuery):
+    """Закрывает список (удаляет сообщение)."""
+    try:
+        await callback.message.delete()
+    except Exception as e:
+        logger.warning(f"Не удалось удалить сообщение: {e}")
     await callback.answer()
