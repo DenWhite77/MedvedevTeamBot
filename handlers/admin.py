@@ -9,6 +9,7 @@
 - Выписка участников (list_, remove_)
 - Отмена через inline-кнопку (cancel)
 - Пропуск комментария (skip)
+- Удаление событий (delete_event_list, delete_)
 """
 import logging
 from aiogram import Router, types
@@ -27,8 +28,11 @@ from config import TOPICS
 
 from db import create_event
 from db import get_event
+from db import get_event_message_id
 from db import confirm_payment, remove_participant, get_participants
 from db import mark_event_published, is_event_published
+from db import delete_event as db_delete_event
+from db import get_all_events
 
 from keyboards import get_cancel_keyboard, get_skip_keyboard, get_main_menu
 from keyboards import get_publish_keyboard, get_event_keyboard, get_admin_list_keyboard
@@ -204,7 +208,6 @@ async def process_comment(message: Message, state: FSMContext):
         f"Всё верно? Нажмите «Опубликовать» или «Отмена»."
     )
 
-    # СНАЧАЛА создаём событие, чтобы получить event_id
     event_id = create_event(
         title=data['direction'],
         direction=data['direction'],
@@ -217,7 +220,6 @@ async def process_comment(message: Message, state: FSMContext):
         comment=data.get('comment', '')
     )
 
-    # ПОТОМ показываем итог с кнопкой, которая знает event_id
     await message.answer(
         summary,
         parse_mode="Markdown",
@@ -332,7 +334,6 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
         await callback.answer("⚠️ Топик не найден.", show_alert=True)
         return
 
-    # Проверяем, не опубликовано ли уже
     if is_event_published(event_id):
         await callback.answer("⚠️ Это событие уже опубликовано!", show_alert=True)
         return
@@ -371,14 +372,12 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
                 reply_markup=get_event_keyboard(event_id)
             )
 
-        # Сохраняем thread_id и message_id в БД
         mark_event_published(event_id, topic["thread_id"], sent.message_id)
 
         await callback.message.answer(
             f"✅ Событие опубликовано в топик {topic['name']}!"
         )
 
-        # Убираем кнопку «Опубликовать» из сообщения с итогом
         try:
             await callback.message.edit_reply_markup(reply_markup=None)
         except Exception as e:
@@ -420,8 +419,7 @@ async def confirm_payment_handler(callback: CallbackQuery, bot: Bot):
     participants = get_participants(event_id)
     new_text = format_event_message(event, participants)
 
-    # Берём message_id из БД
-    message_id = event[14] if len(event) > 14 else None
+    message_id = get_event_message_id(event_id)
 
     if message_id:
         try:
@@ -506,8 +504,7 @@ async def remove_participant_handler(callback: CallbackQuery, bot: Bot):
     participants = get_participants(event_id)
     new_text = format_event_message(event, participants)
 
-    # Берём message_id из БД
-    message_id = event[14] if len(event) > 14 else None
+    message_id = get_event_message_id(event_id)
 
     if message_id:
         try:
@@ -521,7 +518,6 @@ async def remove_participant_handler(callback: CallbackQuery, bot: Bot):
         except Exception as e:
             logger.warning(f"Не удалось отредактировать сообщение: {e}")
 
-    # Обновляем список участников в личке админа
     try:
         await callback.message.edit_text(
             text=(
@@ -556,7 +552,6 @@ async def delete_event_list(callback: CallbackQuery, bot: Bot):
         await callback.answer("⛔ У вас нет прав.", show_alert=True)
         return
 
-    from db import get_all_events
     events = get_all_events()
     if not events:
         await callback.message.answer("⚠️ Нет активных событий.")
@@ -587,9 +582,9 @@ async def delete_event_list(callback: CallbackQuery, bot: Bot):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("delete_"))
+@router.callback_query(F.data.startswith("delete_") & ~F.data.startswith("delete_event_list"))
 async def delete_event(callback: CallbackQuery, bot: Bot):
-    """Удаляет событие из БД и сообщение из группы."""
+    """Удаляет событие из БД (вместе с участниками) и сообщение из группы."""
     event_id = int(callback.data.split("_")[1])
 
     if not is_admin(callback.from_user.id):
@@ -601,10 +596,10 @@ async def delete_event(callback: CallbackQuery, bot: Bot):
         await callback.answer("⚠️ Событие не найдено.", show_alert=True)
         return
 
-    # Удаляем сообщение из группы
-    message_id = event[14] if len(event) > 14 else None
-    thread_id = event[13] if len(event) > 13 else None
+    # Достаём message_id ДО удаления
+    message_id = get_event_message_id(event_id)
 
+    # 1. Удаляем сообщение из группы (не блокирует удаление из БД)
     if message_id:
         try:
             await bot.delete_message(
@@ -615,14 +610,16 @@ async def delete_event(callback: CallbackQuery, bot: Bot):
         except Exception as e:
             logger.warning(f"Не удалось удалить сообщение из группы: {e}")
 
-    # Удаляем из БД
-    from db import get_connection
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM events WHERE id = ?", (event_id,))
-        conn.commit()
+    # 2. Удаляем из БД (вместе с участниками — см. db.delete_event)
+    ok = db_delete_event(event_id)
 
-    await callback.message.answer(f"🗑 Событие ID={event_id} удалено.")
+    if ok:
+        await callback.message.answer(f"🗑 Событие ID={event_id} удалено.")
+    else:
+        await callback.message.answer(
+            f"⚠️ Событие ID={event_id} не найдено в БД (возможно, уже удалено)."
+        )
+
     await callback.answer()
 
 

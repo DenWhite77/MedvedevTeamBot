@@ -13,8 +13,11 @@ DB_PATH = "events.db"
 
 
 def get_connection():
-    """Возвращает подключение к базе данных."""
-    return sqlite3.connect(DB_PATH)
+    """Возвращает подключение к БД с включёнными foreign_keys."""
+    conn = sqlite3.connect(DB_PATH)
+    # ВАЖНО: без этой строки ON DELETE CASCADE не работает!
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 
 def init_db():
@@ -82,6 +85,15 @@ def get_event(event_id):
         return cursor.fetchone()
 
 
+def get_event_message_id(event_id):
+    """Возвращает message_id опубликованного сообщения события (или None)."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT message_id FROM events WHERE id = ?", (event_id,))
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+
 def get_all_events():
     """Возвращает список всех активных событий."""
     with get_connection() as conn:
@@ -112,7 +124,12 @@ def is_event_published(event_id):
 
 
 def add_participant(event_id, user_id, username, full_name):
-    """Добавляет участника в резерв."""
+    """
+    Добавляет участника в резерв.
+    Возвращает:
+        True  — успешно добавлен
+        False — уже был записан (реальная запись в БД)
+    """
     with get_connection() as conn:
         cursor = conn.cursor()
         try:
@@ -123,8 +140,22 @@ def add_participant(event_id, user_id, username, full_name):
             conn.commit()
             return True
         except sqlite3.IntegrityError:
-            logger.warning(f"Пользователь {user_id} уже записан на событие {event_id}.")
-            return False
+            # Проверяем: реальная запись или «фантом»?
+            cursor.execute(
+                "SELECT 1 FROM participants WHERE event_id = ? AND user_id = ?",
+                (event_id, user_id)
+            )
+            real = cursor.fetchone()
+            if real:
+                logger.warning(f"Пользователь {user_id} уже записан на событие {event_id}.")
+                return False
+            else:
+                # IntegrityError есть, а записи нет — событие, вероятно, уже удалено.
+                logger.error(
+                    f"IntegrityError без реальной записи: event={event_id}, user={user_id}. "
+                    f"Возможно, событие удалено, а participants остались."
+                )
+                return False
 
 
 def mark_paid(event_id, user_id):
@@ -178,3 +209,33 @@ def add_to_main(event_id, user_id):
             WHERE event_id = ? AND user_id = ?
         """, (event_id, user_id))
         conn.commit()
+
+
+def delete_event(event_id):
+    """
+    Полностью удаляет событие и всех его участников.
+    Возвращает:
+        True  — событие удалено
+        False — событие не найдено
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        # 1. Явно удаляем участников (страховка на случай, если FK выключены)
+        cursor.execute("DELETE FROM participants WHERE event_id = ?", (event_id,))
+        participants_deleted = cursor.rowcount
+
+        # 2. Удаляем само событие
+        cursor.execute("DELETE FROM events WHERE id = ?", (event_id,))
+        event_deleted = cursor.rowcount
+
+        conn.commit()
+
+        if event_deleted == 0:
+            logger.warning(f"Событие {event_id} не найдено в БД при удалении.")
+            return False
+
+        logger.info(
+            f"Событие {event_id} удалено. Участников удалено: {participants_deleted}."
+        )
+        return True

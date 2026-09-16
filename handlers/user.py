@@ -13,7 +13,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import ADMIN_IDS, GROUP_ID
 
-from db import get_event, add_participant, get_participants, remove_participant
+from db import get_event, get_event_message_id, add_participant, get_participants, remove_participant
 from db import mark_paid
 
 from keyboards import get_event_keyboard
@@ -46,10 +46,13 @@ def format_event_message(event, participants):
         user_id, username, full_name, status, paid = p
         name = full_name or username or f"id{user_id}"
 
+        # Помечаем оплативших
+        marker = " 💳" if paid else ""
+
         if status == "main":
-            main_list.append(f"✅ {name}")
+            main_list.append(f"✅ {name}{marker}")
         else:
-            reserve_list.append(f"🕐 {name}")
+            reserve_list.append(f"🕐 {name}{marker}")
 
     text = (
         f"📅 *{direction}*\n\n"
@@ -98,8 +101,11 @@ async def join_event(callback: CallbackQuery, bot: Bot):
     )
 
     if not success:
+        logger.info(f"Пользователь {user.id} не добавлен на событие {event_id} (уже записан).")
         await callback.answer("⚠️ Вы уже записаны на это событие!", show_alert=True)
         return
+
+    logger.info(f"Пользователь {user.id} записан на событие {event_id}.")
 
     # Отвечаем участнику
     await callback.answer("✅ Вы записаны в резерв!")
@@ -147,7 +153,7 @@ async def paid_event(callback: CallbackQuery, bot: Bot):
 
     # Проверяем, что участник записан
     participants = get_participants(event_id)
-    user_ids = [p[0] for p in participants]  # p[0] = user_id
+    user_ids = [p[0] for p in participants]
 
     user = callback.from_user
     if user.id not in user_ids:
@@ -160,6 +166,25 @@ async def paid_event(callback: CallbackQuery, bot: Bot):
     # Отмечаем, что оплатил
     mark_paid(event_id, user.id)
     await callback.answer("✅ Спасибо! Админ проверит оплату.")
+
+    logger.info(f"Пользователь {user.id} отметил оплату по событию {event_id}.")
+
+    # Обновляем сообщение в группе (показываем галочку «оплатил»)
+    try:
+        participants = get_participants(event_id)
+        new_text = format_event_message(event, participants)
+        message_id = get_event_message_id(event_id)
+
+        if message_id:
+            await bot.edit_message_text(
+                chat_id=GROUP_ID,
+                message_id=message_id,
+                text=new_text,
+                parse_mode="Markdown",
+                reply_markup=get_event_keyboard(event_id)
+            )
+    except Exception as e:
+        logger.warning(f"Не удалось обновить сообщение после отметки оплаты: {e}")
 
     # Отправляем уведомление всем админам
     for admin_id in ADMIN_IDS:
@@ -202,6 +227,8 @@ async def cancel_event(callback: CallbackQuery, bot: Bot):
     remove_participant(event_id, user.id)
     await callback.answer("✅ Вы отменили запись.")
 
+    logger.info(f"Пользователь {user.id} отменил запись на событие {event_id}.")
+
     # Отправляем ЛС участнику
     try:
         await bot.send_message(
@@ -220,7 +247,7 @@ async def cancel_event(callback: CallbackQuery, bot: Bot):
     participants = get_participants(event_id)
     new_text = format_event_message(event, participants)
 
-    message_id = event[14] if len(event) > 14 else None
+    message_id = get_event_message_id(event_id)
 
     if message_id:
         try:
