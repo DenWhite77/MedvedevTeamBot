@@ -533,3 +533,29 @@ async def remove_participant_handler(callback: CallbackQuery, bot: Bot):
         )
     except Exception as e:
         logger.warning(f"Не удалось обновить список: {e}")
+
+
+@router.callback_query(F.data == "edit_event_list")
+async def edit_event_list(callback: CallbackQuery, bot: Bot):
+    """Показывает список событий для редактирования (заглушка)."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    await callback.message.answer(
+        "✏️ Редактирование событий — функция в разработке."
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "delete_event_list")
+async def delete_event_list(callback: CallbackQuery, bot: Bot):
+    """Показывает список событий для удаления (заглушка)."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    await callback.message.answer(
+        "🗑 Удаление событий — функция в разработке."
+    )
+    await callback.answer()

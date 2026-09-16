@@ -11,11 +11,12 @@ from config import TOPICS
 # Общие клавиатуры
 # ============================================================
 
-def get_main_menu():
+ef get_main_menu():
     """Главное меню (для админа)."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📅 Создать событие", callback_data="new_event")],
-        [InlineKeyboardButton(text="📋 Мои события", callback_data="my_events")],
+        [InlineKeyboardButton(text="✏️ Редактировать событие", callback_data="edit_event_list")],
+        [InlineKeyboardButton(text="🗑 Удалить событие", callback_data="delete_event_list")],
     ])
     return keyboard
 
