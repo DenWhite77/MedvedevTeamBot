@@ -11,7 +11,7 @@ from config import TOPICS
 # Общие клавиатуры
 # ============================================================
 
-ef get_main_menu():
+def get_main_menu():
     """Главное меню (для админа)."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📅 Создать событие", callback_data="new_event")],
