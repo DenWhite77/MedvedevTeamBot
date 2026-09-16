@@ -372,6 +372,16 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
                 reply_markup=get_event_keyboard(event_id)
             )
 
+        logger.info(
+            f"=== ПУБЛИКАЦИЯ ===\n"
+            f"event_id={event_id}\n"
+            f"topic={topic}\n"
+            f"GROUP_ID={GROUP_ID}\n"
+            f"sent.message_id={sent.message_id}\n"
+            f"sent.chat.id={sent.chat.id}\n"
+            f"sent.message_thread_id={getattr(sent, 'message_thread_id', None)}"
+        )
+
         mark_event_published(event_id, topic["thread_id"], sent.message_id)
 
         await callback.message.answer(
