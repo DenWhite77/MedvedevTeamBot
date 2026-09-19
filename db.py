@@ -3,7 +3,7 @@
 
 Отвечает за работу с базой данных SQLite.
 Содержит функции для создания событий, добавления участников,
-работы с библиотекой адресов и шаблонами времени.
+работы с библиотекой адресов, временем начала и длительностями.
 """
 import sqlite3
 import logging
@@ -72,13 +72,22 @@ def init_db():
             );
         """)
 
-        # Таблица шаблонов времени
+        # Таблица времён начала события
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS time_slots (
+            CREATE TABLE IF NOT EXISTS start_times (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                start_time TEXT NOT NULL,
-                end_time TEXT NOT NULL,
-                label TEXT NOT NULL UNIQUE,
+                time TEXT NOT NULL UNIQUE,
+                sort_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # Таблица длительностей события
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS durations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hours INTEGER NOT NULL UNIQUE,
+                label TEXT NOT NULL,
                 sort_order INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -105,19 +114,32 @@ def _seed_defaults(cursor):
         """, ("ул. Подольских Курсантов, 16-А (Школа № 657)",))
         logger.info("Добавлен дефолтный адрес.")
 
-    # Дефолтные слоты времени
-    cursor.execute("SELECT COUNT(*) FROM time_slots;")
+    # Дефолтные времена начала
+    cursor.execute("SELECT COUNT(*) FROM start_times;")
     if cursor.fetchone()[0] == 0:
-        defaults = [
-            ("20:00", "22:00", "20:00–22:00 (2ч)", 1),
-            ("19:00", "21:00", "19:00–21:00 (2ч)", 2),
-            ("18:00", "20:00", "18:00–20:00 (2ч)", 3),
+        default_times = [
+            ("18:00", 1),
+            ("19:00", 2),
+            ("20:00", 3),
+            ("21:00", 4),
         ]
         cursor.executemany("""
-            INSERT INTO time_slots (start_time, end_time, label, sort_order)
-            VALUES (?, ?, ?, ?)
-        """, defaults)
-        logger.info("Добавлены дефолтные слоты времени.")
+            INSERT INTO start_times (time, sort_order) VALUES (?, ?)
+        """, default_times)
+        logger.info("Added default start times.")
+
+    # Дефолтные длительности
+    cursor.execute("SELECT COUNT(*) FROM durations;")
+    if cursor.fetchone()[0] == 0:
+        default_durations = [
+            (1, "1 час", 1),
+            (2, "2 часа", 2),
+            (3, "3 часа", 3),
+        ]
+        cursor.executemany("""
+            INSERT INTO durations (hours, label, sort_order) VALUES (?, ?, ?)
+        """, default_durations)
+        logger.info("Added default durations.")
 
 
 # ============================================================
@@ -370,49 +392,117 @@ def set_default_address(address_id):
 
 
 # ============================================================
-# ШАБЛОНЫ ВРЕМЕНИ
+# ВРЕМЯ НАЧАЛА
 # ============================================================
 
-def get_time_slots():
-    """Возвращает список всех шаблонов времени, отсортированных по sort_order."""
+def get_start_times():
+    """Возвращает список времён начала, отсортированных по sort_order."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, start_time, end_time, label
-            FROM time_slots
+            SELECT id, time
+            FROM start_times
             ORDER BY sort_order ASC, id ASC
         """)
         return cursor.fetchall()
 
 
-def add_time_slot(start_time, end_time, label, sort_order=100):
+def add_start_time(time: str, sort_order: int = 100):
     """
-    Добавляет шаблон времени.
-    Возвращает ID нового слота или None, если такой уже есть.
+    Добавляет время начала в библиотеку.
+    Возвращает ID нового времени или None, если такое уже есть.
     """
     with get_connection() as conn:
         cursor = conn.cursor()
         try:
             cursor.execute("""
-                INSERT INTO time_slots (start_time, end_time, label, sort_order)
-                VALUES (?, ?, ?, ?)
-            """, (start_time, end_time, label, sort_order))
+                INSERT INTO start_times (time, sort_order)
+                VALUES (?, ?)
+            """, (time, sort_order))
             conn.commit()
             return cursor.lastrowid
         except sqlite3.IntegrityError:
-            logger.warning(f"Слот уже существует: {label}")
+            logger.warning(f"Start time already exists: {time}")
             return None
 
 
-def delete_time_slot(slot_id):
-    """Удаляет шаблон времени по ID. Возвращает True при успехе."""
+def delete_start_time(time_id: int):
+    """Удаляет время начала по ID. Возвращает True при успехе."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM time_slots WHERE id = ?", (slot_id,))
+        cursor.execute("DELETE FROM start_times WHERE id = ?", (time_id,))
         deleted = cursor.rowcount
         conn.commit()
         if deleted == 0:
-            logger.warning(f"Слот {slot_id} не найден при удалении.")
+            logger.warning(f"Start time {time_id} not found for deletion.")
             return False
-        logger.info(f"Слот {slot_id} удалён.")
+        logger.info(f"Start time {time_id} deleted.")
         return True
+
+
+# ============================================================
+# ДЛИТЕЛЬНОСТЬ
+# ============================================================
+
+def get_durations():
+    """Возвращает список длительностей, отсортированных по sort_order."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, hours, label
+            FROM durations
+            ORDER BY sort_order ASC, id ASC
+        """)
+        return cursor.fetchall()
+
+
+def add_duration(hours: int, label: str, sort_order: int = 100):
+    """
+    Добавляет длительность в библиотеку.
+    Возвращает ID новой длительности или None, если такая уже есть.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO durations (hours, label, sort_order)
+                VALUES (?, ?, ?)
+            """, (hours, label, sort_order))
+            conn.commit()
+            return cursor.lastrowid
+        except sqlite3.IntegrityError:
+            logger.warning(f"Duration already exists: {hours}")
+            return None
+
+
+def delete_duration(duration_id: int):
+    """Удаляет длительность по ID. Возвращает True при успехе."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM durations WHERE id = ?", (duration_id,))
+        deleted = cursor.rowcount
+        conn.commit()
+        if deleted == 0:
+            logger.warning(f"Duration {duration_id} not found for deletion.")
+            return False
+        logger.info(f"Duration {duration_id} deleted.")
+        return True
+
+
+# ============================================================
+# УТИЛИТА: РАСЧЁТ ВРЕМЕНИ ОКОНЧАНИЯ
+# ============================================================
+
+def calculate_end_time(start_time: str, duration_hours: int) -> str:
+    """
+    Считает время окончания события.
+    Пример: calculate_end_time("20:00", 2) → "22:00"
+    Если сумма больше 24 часов — возвращает время со сдвигом (например, 23:00 + 3 = 02:00).
+    """
+    try:
+        h, m = map(int, start_time.split(":"))
+        total = h * 60 + m + duration_hours * 60
+        return f"{(total // 60) % 24:02d}:{total % 60:02d}"
+    except Exception as e:
+        logger.error(f"calculate_end_time error: start_time={start_time}, duration={duration_hours}, err={e}")
+        return "??:??"

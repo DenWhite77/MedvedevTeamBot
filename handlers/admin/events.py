@@ -2,7 +2,7 @@
 Модуль handlers/admin/events.py
 
 Содержит обработчики для работы с событиями:
-- Создание события (/new_event) с выбором адреса и времени из библиотеки
+- Создание события (/new_event) с выбором адреса, времени начала и длительности
 - Публикация события в топики
 - Удаление событий
 - Отмена диалога
@@ -20,13 +20,17 @@ from config import GROUP_ID, TOPICS
 from db import (
     create_event, get_event, get_event_message_id, get_all_events,
     mark_event_published, is_event_published, delete_event as db_delete_event,
-    get_addresses, add_address, get_time_slots, add_time_slot,
+    get_addresses, add_address,
+    get_start_times, add_start_time,
+    get_durations, add_duration,
+    calculate_end_time,
 )
 
 from keyboards import (
     get_cancel_keyboard, get_skip_keyboard, get_main_menu,
     get_publish_keyboard, get_event_keyboard, get_topics_keyboard,
-    get_addresses_keyboard, get_time_slots_keyboard,
+    get_addresses_keyboard,
+    get_start_times_keyboard, get_durations_keyboard,
 )
 
 from .common import is_admin, build_event_summary
@@ -42,8 +46,9 @@ class NewEventStates(StatesGroup):
     place = State()
     place_manual = State()
     date = State()
-    time = State()
-    time_manual = State()
+    time_start = State()            # выбор времени начала
+    time_start_manual = State()     # ручной ввод времени начала
+    time_duration = State()         # выбор длительности
     max_participants = State()
     price = State()
     payment_info = State()
@@ -199,105 +204,161 @@ async def address_save_no(callback: CallbackQuery, state: FSMContext):
 async def process_date(message: Message, state: FSMContext):
     await state.update_data(date=message.text)
 
-    slots = get_time_slots()
-    if slots:
+    start_times = get_start_times()
+    if start_times:
         await message.answer(
-            "🕐 *Выберите время:*",
+            "🕐 *Выберите время начала:*",
             parse_mode="Markdown",
-            reply_markup=get_time_slots_keyboard(slots)
+            reply_markup=get_start_times_keyboard(start_times)
         )
-        await state.set_state(NewEventStates.time)
+        await state.set_state(NewEventStates.time_start)
     else:
         await message.answer(
-            "🕐 Введите время вручную (например, «20:00–22:00»):",
+            "🕐 Введите время начала вручную (например, «20:00»):",
             reply_markup=get_cancel_keyboard()
         )
-        await state.set_state(NewEventStates.time_manual)
+        await state.set_state(NewEventStates.time_start_manual)
 
 
-@router.callback_query(F.data.startswith("time_pick_"))
-async def time_slot_picked(callback: CallbackQuery, state: FSMContext):
-    slot_id = int(callback.data.split("_")[2])
-    slots = get_time_slots()
-    chosen = next((s for s in slots if s[0] == slot_id), None)
+@router.callback_query(F.data.startswith("time_start_pick_"))
+async def time_start_picked(callback: CallbackQuery, state: FSMContext):
+    """Админ выбрал время начала из библиотеки."""
+    time_id = int(callback.data.split("_")[3])
+    start_times = get_start_times()
+    chosen = next((t for t in start_times if t[0] == time_id), None)
 
     if not chosen:
-        await callback.answer("⚠️ Слот не найден.", show_alert=True)
+        await callback.answer("⚠️ Время не найдено.", show_alert=True)
         return
 
-    time_label = f"{chosen[1]}–{chosen[2]}"
-    await state.update_data(time=time_label)
+    await state.update_data(time_start=chosen[1])
 
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    await callback.message.answer(f"🕐 Время: *{time_label}*", parse_mode="Markdown")
     await callback.message.answer(
-        "👥 Введите максимальное количество участников (число):",
-        reply_markup=get_cancel_keyboard()
+        f"🕐 Время начала: *{chosen[1]}*",
+        parse_mode="Markdown"
     )
-    await state.set_state(NewEventStates.max_participants)
+    await _ask_for_duration(callback.message, state)
     await callback.answer()
 
 
-@router.callback_query(F.data == "time_manual")
-async def time_manual_start(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "time_start_manual")
+async def time_start_manual_start(callback: CallbackQuery, state: FSMContext):
+    """Ручной ввод времени начала."""
     await callback.message.answer(
-        "🕐 Введите время:\n\nПример: 20:00–22:00",
+        "🕐 Введите время начала:\n\nПример: 20:00",
         reply_markup=get_cancel_keyboard()
     )
-    await state.set_state(NewEventStates.time_manual)
+    await state.set_state(NewEventStates.time_start_manual)
     await callback.answer()
 
 
-@router.message(NewEventStates.time_manual)
-async def process_time_manual(message: Message, state: FSMContext):
+@router.message(NewEventStates.time_start_manual)
+async def process_time_start_manual(message: Message, state: FSMContext):
+    """Ручной ввод времени начала. Спрашиваем, сохранить ли в библиотеку."""
     time_str = message.text.strip()
-    await state.update_data(time=time_str, pending_time=time_str)
+
+    # Базовая валидация формата
+    parts = time_str.replace(".", ":").split(":")
+    if len(parts) != 2 or not all(p.strip().isdigit() for p in parts):
+        await message.answer(
+            "⚠️ Неверный формат. Введите время как `20:00`.",
+            parse_mode="Markdown"
+        )
+        return
+
+    await state.update_data(time_start=time_str, pending_start_time=time_str)
 
     await message.answer(
-        f"🕐 Время: *{time_str}*\n\n"
-        f"Сохранить его как шаблон?",
+        f"🕐 Время начала: *{time_str}*\n\n"
+        f"Сохранить в библиотеку времён?",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Сохранить", callback_data="time_save_yes")],
-            [InlineKeyboardButton(text="➡️ Не сохранять", callback_data="time_save_no")],
+            [InlineKeyboardButton(text="✅ Сохранить", callback_data="time_start_save_yes")],
+            [InlineKeyboardButton(text="➡️ Не сохранять", callback_data="time_start_save_no")],
         ])
     )
 
 
-@router.callback_query(F.data == "time_save_yes")
-async def time_save_yes(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "time_start_save_yes")
+async def time_start_save_yes(callback: CallbackQuery, state: FSMContext):
+    """Сохраняем время начала в библиотеку."""
     data = await state.get_data()
-    time_str = data.get("pending_time", "")
+    time_str = data.get("pending_start_time")
 
-    parsed = False
-    for sep in ["–", "-", "—"]:
-        if sep in time_str:
-            parts = time_str.split(sep)
-            if len(parts) == 2:
-                start = parts[0].strip()
-                end = parts[1].strip()
-                label = f"{start}–{end}"
-                result = add_time_slot(start, end, label)
-                if result:
-                    await callback.message.answer("✅ Шаблон сохранён.")
-                else:
-                    await callback.message.answer("ℹ️ Такой шаблон уже есть.")
-                parsed = True
-                break
+    if time_str:
+        result = add_start_time(time_str)
+        if result:
+            await callback.message.answer(f"✅ Время *{time_str}* сохранено.", parse_mode="Markdown")
+        else:
+            await callback.message.answer("ℹ️ Такое время уже есть.")
 
-    if not parsed:
-        await callback.message.answer(
-            "⚠️ Не удалось распознать формат времени. "
-            "Шаблон не сохранён, но событие продолжим создавать."
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await _ask_for_duration(callback.message, state)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "time_start_save_no")
+async def time_start_save_no(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await _ask_for_duration(callback.message, state)
+    await callback.answer()
+
+
+async def _ask_for_duration(target_message, state: FSMContext):
+    """Показывает клавиатуру выбора длительности."""
+    durations = get_durations()
+    if durations:
+        await target_message.answer(
+            "⏱ *Выберите длительность:*",
+            parse_mode="Markdown",
+            reply_markup=get_durations_keyboard(durations)
         )
+        await state.set_state(NewEventStates.time_duration)
+    else:
+        await target_message.answer(
+            "⏱ Введите длительность в часах (число, например «2»):",
+            reply_markup=get_cancel_keyboard()
+        )
+        await state.set_state(NewEventStates.time_duration)
+
+
+@router.callback_query(F.data.startswith("duration_pick_"))
+async def duration_picked(callback: CallbackQuery, state: FSMContext):
+    """Админ выбрал длительность."""
+    dur_id = int(callback.data.split("_")[2])
+    durations = get_durations()
+    chosen = next((d for d in durations if d[0] == dur_id), None)
+
+    if not chosen:
+        await callback.answer("⚠️ Длительность не найдена.", show_alert=True)
+        return
+
+    dur_id, hours, label = chosen
+    data = await state.get_data()
+    start_time = data.get("time_start", "??:??")
+    end_time = calculate_end_time(start_time, hours)
+    time_full = f"{start_time}–{end_time}"
+
+    await state.update_data(time=time_full)
 
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
+    await callback.message.answer(
+        f"✅ Итоговое время: *{time_full}*",
+        parse_mode="Markdown"
+    )
     await callback.message.answer(
         "👥 Введите максимальное количество участников (число):",
         reply_markup=get_cancel_keyboard()
@@ -306,18 +367,25 @@ async def time_save_yes(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "time_save_no")
-async def time_save_no(callback: CallbackQuery, state: FSMContext):
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-    await callback.message.answer(
+@router.message(NewEventStates.time_duration)
+async def process_duration_manual(message: Message, state: FSMContext):
+    """Если библиотека длительностей пуста — ручной ввод числа часов."""
+    if not message.text.strip().isdigit():
+        await message.answer("⚠️ Введите целое число часов (например, «2»).")
+        return
+    hours = int(message.text.strip())
+    data = await state.get_data()
+    start_time = data.get("time_start", "??:??")
+    end_time = calculate_end_time(start_time, hours)
+    time_full = f"{start_time}–{end_time}"
+
+    await state.update_data(time=time_full)
+    await message.answer(f"✅ Итоговое время: *{time_full}*", parse_mode="Markdown")
+    await message.answer(
         "👥 Введите максимальное количество участников (число):",
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(NewEventStates.max_participants)
-    await callback.answer()
 
 
 @router.message(NewEventStates.max_participants)

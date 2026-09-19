@@ -3,7 +3,8 @@
 
 Содержит обработчики для управления библиотеками:
 - Адреса (просмотр, добавление, удаление, установка основного)
-- Шаблоны времени (просмотр, добавление, удаление)
+- Времена начала события (просмотр, добавление, удаление)
+- Длительности события (просмотр, добавление, удаление)
 """
 import logging
 from aiogram import Router, F
@@ -13,13 +14,14 @@ from aiogram.types import Message, CallbackQuery
 
 from db import (
     get_addresses, add_address, delete_address, set_default_address,
-    get_time_slots, add_time_slot, delete_time_slot,
+    get_start_times, add_start_time, delete_start_time,
+    get_durations, add_duration, delete_duration,
 )
 
 from keyboards import (
     get_cancel_keyboard, get_main_menu, get_settings_menu,
     get_address_management_keyboard, get_address_info_keyboard,
-    get_time_slots_management_keyboard,
+    get_start_times_management_keyboard, get_durations_management_keyboard,
 )
 
 from .common import is_admin
@@ -34,10 +36,15 @@ class AddressStates(StatesGroup):
     add = State()
 
 
-class TimeSlotStates(StatesGroup):
-    """Состояния для управления слотами времени."""
-    add_start = State()
-    add_end = State()
+class StartTimeStates(StatesGroup):
+    """Состояния для управления временами начала."""
+    add = State()
+
+
+class DurationStates(StatesGroup):
+    """Состояния для управления длительностями."""
+    add_hours = State()
+    add_label = State()
 
 
 # ============================================================
@@ -95,7 +102,6 @@ async def manage_addresses(callback: CallbackQuery):
             reply_markup=get_address_management_keyboard(addresses)
         )
     except Exception:
-        # Если сообщение не редактируется (например, после другого действия)
         await callback.message.answer(
             text,
             parse_mode="Markdown",
@@ -184,18 +190,18 @@ async def addr_add_process(message: Message, state: FSMContext):
 
 
 # ============================================================
-# УПРАВЛЕНИЕ ШАБЛОНАМИ ВРЕМЕНИ
+# УПРАВЛЕНИЕ ВРЕМЕНАМИ НАЧАЛА
 # ============================================================
 
-@router.callback_query(F.data == "manage_time_slots")
-async def manage_time_slots(callback: CallbackQuery):
+@router.callback_query(F.data == "manage_start_times")
+async def manage_start_times(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ У вас нет прав.", show_alert=True)
         return
 
-    slots = get_time_slots()
-    text = "🕐 *Управление шаблонами времени*\n\n"
-    if not slots:
+    start_times = get_start_times()
+    text = "🕐 *Управление временами начала*\n\n"
+    if not start_times:
         text += "_Список пуст._"
     else:
         text += "Нажмите 🗑 для удаления."
@@ -204,84 +210,180 @@ async def manage_time_slots(callback: CallbackQuery):
         await callback.message.edit_text(
             text,
             parse_mode="Markdown",
-            reply_markup=get_time_slots_management_keyboard(slots)
+            reply_markup=get_start_times_management_keyboard(start_times)
         )
     except Exception:
         await callback.message.answer(
             text,
             parse_mode="Markdown",
-            reply_markup=get_time_slots_management_keyboard(slots)
+            reply_markup=get_start_times_management_keyboard(start_times)
         )
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("slot_del_"))
-async def slot_del(callback: CallbackQuery):
+@router.callback_query(F.data.startswith("start_time_del_"))
+async def start_time_del(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ У вас нет прав.", show_alert=True)
         return
 
-    slot_id = int(callback.data.split("_")[2])
-    ok = delete_time_slot(slot_id)
+    time_id = int(callback.data.split("_")[3])
+    ok = delete_start_time(time_id)
     if ok:
-        await callback.answer("🗑 Шаблон удалён.")
+        await callback.answer("🗑 Время удалено.")
     else:
-        await callback.answer("⚠️ Шаблон не найден.", show_alert=True)
-    await manage_time_slots(callback)
+        await callback.answer("⚠️ Время не найдено.", show_alert=True)
+    await manage_start_times(callback)
 
 
-@router.callback_query(F.data == "slot_add")
-async def slot_add_start(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith("start_time_info_"))
+async def start_time_info(callback: CallbackQuery):
+    """Просто показывает информацию — заглушка для кнопки с названием времени."""
+    await callback.answer("Нажмите 🗑, чтобы удалить это время.", show_alert=False)
+
+
+@router.callback_query(F.data == "start_time_add")
+async def start_time_add_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ У вас нет прав.", show_alert=True)
         return
 
     await callback.message.answer(
-        "🕐 Введите время начала (например, «20:00»):",
+        "🕐 Введите время начала:\n\nПример: 20:00",
         reply_markup=get_cancel_keyboard()
     )
-    await state.set_state(TimeSlotStates.add_start)
+    await state.set_state(StartTimeStates.add)
     await callback.answer()
 
 
-@router.message(TimeSlotStates.add_start)
-async def slot_add_start_process(message: Message, state: FSMContext):
+@router.message(StartTimeStates.add)
+async def start_time_add_process(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await message.answer("⛔ У вас нет прав.")
         return
 
-    await state.update_data(start_time=message.text.strip())
-    await message.answer(
-        "🕐 Введите время окончания (например, «22:00»):",
-        reply_markup=get_cancel_keyboard()
-    )
-    await state.set_state(TimeSlotStates.add_end)
+    time_str = message.text.strip()
 
-
-@router.message(TimeSlotStates.add_end)
-async def slot_add_end_process(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        await message.answer("⛔ У вас нет прав.")
+    # Валидация формата
+    parts = time_str.replace(".", ":").split(":")
+    if len(parts) != 2 or not all(p.strip().isdigit() for p in parts):
+        await message.answer(
+            "⚠️ Неверный формат. Введите время как `20:00`.",
+            parse_mode="Markdown"
+        )
         return
 
-    end_time = message.text.strip()
-    data = await state.get_data()
-    start_time = data["start_time"]
+    result = add_start_time(time_str)
+    if result:
+        await message.answer(f"✅ Время *{time_str}* добавлено.", parse_mode="Markdown")
+    else:
+        await message.answer("ℹ️ Такое время уже есть.")
+    await state.clear()
+
+
+# ============================================================
+# УПРАВЛЕНИЕ ДЛИТЕЛЬНОСТЯМИ
+# ============================================================
+
+@router.callback_query(F.data == "manage_durations")
+async def manage_durations(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    durations = get_durations()
+    text = "⏱ *Управление длительностями*\n\n"
+    if not durations:
+        text += "_Список пуст._"
+    else:
+        text += "Нажмите 🗑 для удаления."
 
     try:
-        sh, sm = map(int, start_time.split(":"))
-        eh, em = map(int, end_time.split(":"))
-        duration_min = (eh * 60 + em) - (sh * 60 + sm)
-        duration_h = duration_min // 60
-        duration_label = f"{duration_h}ч" if duration_min % 60 == 0 else f"{duration_min}мин"
+        await callback.message.edit_text(
+            text,
+            parse_mode="Markdown",
+            reply_markup=get_durations_management_keyboard(durations)
+        )
     except Exception:
-        duration_label = "?"
+        await callback.message.answer(
+            text,
+            parse_mode="Markdown",
+            reply_markup=get_durations_management_keyboard(durations)
+        )
+    await callback.answer()
 
-    label = f"{start_time}–{end_time} ({duration_label})"
 
-    result = add_time_slot(start_time, end_time, label)
-    if result:
-        await message.answer(f"✅ Шаблон *{label}* добавлен.", parse_mode="Markdown")
+@router.callback_query(F.data.startswith("duration_del_"))
+async def duration_del(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    dur_id = int(callback.data.split("_")[2])
+    ok = delete_duration(dur_id)
+    if ok:
+        await callback.answer("🗑 Длительность удалена.")
     else:
-        await message.answer("ℹ️ Такой шаблон уже есть.")
+        await callback.answer("⚠️ Длительность не найдена.", show_alert=True)
+    await manage_durations(callback)
+
+
+@router.callback_query(F.data.startswith("duration_info_"))
+async def duration_info(callback: CallbackQuery):
+    """Заглушка для кнопки с названием длительности."""
+    await callback.answer("Нажмите 🗑, чтобы удалить.", show_alert=False)
+
+
+@router.callback_query(F.data == "duration_add")
+async def duration_add_start(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    await callback.message.answer(
+        "⏱ Введите длительность в часах (целое число, например «2»):\n\n"
+        "Потом попросим ввести текстовую метку (например, «2 часа»).",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(DurationStates.add_hours)
+    await callback.answer()
+
+
+@router.message(DurationStates.add_hours)
+async def duration_add_hours(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ У вас нет прав.")
+        return
+
+    text = message.text.strip()
+    if not text.isdigit() or int(text) < 1 or int(text) > 24:
+        await message.answer("⚠️ Введите целое число часов от 1 до 24.")
+        return
+
+    await state.update_data(hours=int(text))
+    await message.answer(
+        "📝 Введите текстовую метку (например, «2 часа», «Полтора часа»):",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(DurationStates.add_label)
+
+
+@router.message(DurationStates.add_label)
+async def duration_add_label(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ У вас нет прав.")
+        return
+
+    label = message.text.strip()
+    data = await state.get_data()
+    hours = data.get("hours")
+
+    result = add_duration(hours, label)
+    if result:
+        await message.answer(
+            f"✅ Длительность *{label}* ({hours}ч) добавлена.",
+            parse_mode="Markdown"
+        )
+    else:
+        await message.answer("ℹ️ Такая длительность уже есть.")
     await state.clear()

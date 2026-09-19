@@ -165,23 +165,52 @@ def get_addresses_keyboard(addresses, default_address=None):
 # НОВОЕ: Выбор времени при создании события
 # ============================================================
 
-def get_time_slots_keyboard(slots):
+def get_start_times_keyboard(start_times):
     """
-    Клавиатура выбора шаблона времени.
-    slots: список кортежей (id, start_time, end_time, label) из db.get_time_slots()
+    Клавиатура выбора времени начала.
+    start_times: список кортежей (id, time) из db.get_start_times()
     """
     buttons = []
-    for slot_id, start_time, end_time, label in slots:
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"🕐 {label}",
-                callback_data=f"time_pick_{slot_id}"
-            )
-        ])
+    # По 2 кнопки в ряд
+    row = []
+    for time_id, time_str in start_times:
+        row.append(InlineKeyboardButton(
+            text=f"🕐 {time_str}",
+            callback_data=f"time_start_pick_{time_id}"
+        ))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
 
     buttons.append([
-        InlineKeyboardButton(text="✏️ Ввести время вручную", callback_data="time_manual")
+        InlineKeyboardButton(text="✏️ Ввести вручную", callback_data="time_start_manual")
     ])
+    buttons.append([
+        InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_durations_keyboard(durations):
+    """
+    Клавиатура выбора длительности.
+    durations: список кортежей (id, hours, label) из db.get_durations()
+    """
+    buttons = []
+    row = []
+    for dur_id, hours, label in durations:
+        row.append(InlineKeyboardButton(
+            text=f"⏱ {label}",
+            callback_data=f"duration_pick_{dur_id}"
+        ))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
     buttons.append([
         InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")
     ])
@@ -196,7 +225,8 @@ def get_settings_menu():
     """Меню настроек (⚙️ Настройки)."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📍 Адреса", callback_data="manage_addresses")],
-        [InlineKeyboardButton(text="🕐 Шаблоны времени", callback_data="manage_time_slots")],
+        [InlineKeyboardButton(text="🕐 Время начала", callback_data="manage_start_times")],
+        [InlineKeyboardButton(text="⏱ Длительность", callback_data="manage_durations")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")],
     ])
     return keyboard
@@ -255,26 +285,54 @@ def get_address_info_keyboard(address_id, is_default):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_time_slots_management_keyboard(slots):
+def get_start_times_management_keyboard(start_times):
     """
-    Клавиатура управления шаблонами времени (для админа).
-    slots: список кортежей (id, start_time, end_time, label)
+    Клавиатура управления временами начала (для админа).
+    start_times: список кортежей (id, time)
     """
     buttons = []
-    for slot_id, start_time, end_time, label in slots:
+    row = []
+    for time_id, time_str in start_times:
+        row.append(InlineKeyboardButton(
+            text=f"🕐 {time_str}",
+            callback_data=f"start_time_info_{time_id}"
+        ))
+        row.append(InlineKeyboardButton(
+            text="🗑",
+            callback_data=f"start_time_del_{time_id}"
+        ))
+        buttons.append(row)
+        row = []
+
+    buttons.append([
+        InlineKeyboardButton(text="➕ Добавить время", callback_data="start_time_add")
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="🔙 Назад", callback_data="settings_menu")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_durations_management_keyboard(durations):
+    """
+    Клавиатура управления длительностями (для админа).
+    durations: список кортежей (id, hours, label)
+    """
+    buttons = []
+    for dur_id, hours, label in durations:
         buttons.append([
             InlineKeyboardButton(
-                text=f"🕐 {label}",
-                callback_data=f"slot_info_{slot_id}"
+                text=f"⏱ {label}",
+                callback_data=f"duration_info_{dur_id}"
             ),
             InlineKeyboardButton(
                 text="🗑",
-                callback_data=f"slot_del_{slot_id}"
+                callback_data=f"duration_del_{dur_id}"
             ),
         ])
 
     buttons.append([
-        InlineKeyboardButton(text="➕ Добавить слот", callback_data="slot_add")
+        InlineKeyboardButton(text="➕ Добавить длительность", callback_data="duration_add")
     ])
     buttons.append([
         InlineKeyboardButton(text="🔙 Назад", callback_data="settings_menu")
