@@ -1,10 +1,11 @@
 """
 Модуль handlers/admin/settings.py
 
-Содержит обработчики для управления библиотеками:
-- Адреса (просмотр, добавление, удаление, установка основного)
-- Времена начала события (просмотр, добавление, удаление)
-- Длительности события (просмотр, добавление, удаление)
+Управление библиотеками:
+- Направления
+- Адреса
+- Времена начала
+- Длительности
 """
 import logging
 from aiogram import Router, F
@@ -13,6 +14,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery
 
 from db import (
+    get_directions, add_direction, delete_direction, set_default_direction,
     get_addresses, add_address, delete_address, set_default_address,
     get_start_times, add_start_time, delete_start_time,
     get_durations, add_duration, delete_duration,
@@ -20,6 +22,7 @@ from db import (
 
 from keyboards import (
     get_cancel_keyboard, get_main_menu, get_settings_menu,
+    get_directions_management_keyboard, get_direction_info_keyboard,
     get_address_management_keyboard, get_address_info_keyboard,
     get_start_times_management_keyboard, get_durations_management_keyboard,
 )
@@ -31,18 +34,19 @@ logger = logging.getLogger(__name__)
 router = Router(name="admin_settings")
 
 
+class DirectionStates(StatesGroup):
+    add = State()
+
+
 class AddressStates(StatesGroup):
-    """Состояния для управления адресами."""
     add = State()
 
 
 class StartTimeStates(StatesGroup):
-    """Состояния для управления временами начала."""
     add = State()
 
 
 class DurationStates(StatesGroup):
-    """Состояния для управления длительностями."""
     add_hours = State()
     add_label = State()
 
@@ -76,6 +80,116 @@ async def back_to_main(callback: CallbackQuery):
         reply_markup=get_main_menu()
     )
     await callback.answer()
+
+
+# ============================================================
+# УПРАВЛЕНИЕ НАПРАВЛЕНИЯМИ
+# ============================================================
+
+@router.callback_query(F.data == "manage_directions")
+async def manage_directions(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    directions = get_directions()
+    text = "🏐 *Управление направлениями*\n\n"
+    if not directions:
+        text += "_Список пуст._"
+    else:
+        text += "⭐ — основное направление.\nНажмите на направление для действий."
+
+    try:
+        await callback.message.edit_text(
+            text,
+            parse_mode="Markdown",
+            reply_markup=get_directions_management_keyboard(directions)
+        )
+    except Exception:
+        await callback.message.answer(
+            text,
+            parse_mode="Markdown",
+            reply_markup=get_directions_management_keyboard(directions)
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("direction_info_"))
+async def direction_info(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    dir_id = int(callback.data.split("_")[2])
+    directions = get_directions()
+    chosen = next((d for d in directions if d[0] == dir_id), None)
+    if not chosen:
+        await callback.answer("⚠️ Направление не найдено.", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        f"🏐 *Направление:*\n{chosen[1]}\n\n"
+        f"⭐ Основное: {'да' if chosen[2] else 'нет'}",
+        parse_mode="Markdown",
+        reply_markup=get_direction_info_keyboard(dir_id, bool(chosen[2]))
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("direction_set_default_"))
+async def direction_set_default(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    dir_id = int(callback.data.split("_")[3])
+    set_default_direction(dir_id)
+    await callback.answer("⭐ Направление сделано основным.")
+    await manage_directions(callback)
+
+
+@router.callback_query(F.data.startswith("direction_del_"))
+async def direction_del(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    dir_id = int(callback.data.split("_")[2])
+    ok = delete_direction(dir_id)
+    if ok:
+        await callback.answer("🗑 Направление удалено.")
+    else:
+        await callback.answer("⚠️ Направление не найдено.", show_alert=True)
+    await manage_directions(callback)
+
+
+@router.callback_query(F.data == "direction_add")
+async def direction_add_start(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    await callback.message.answer(
+        "🏐 Введите направление:\n\nПример: Волейбол классический",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(DirectionStates.add)
+    await callback.answer()
+
+
+@router.message(DirectionStates.add)
+async def direction_add_process(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ У вас нет прав.")
+        return
+
+    name = message.text.strip()
+    result = add_direction(name)
+    if result:
+        await message.answer(f"✅ Направление *{name}* добавлено.", parse_mode="Markdown")
+    else:
+        await message.answer("ℹ️ Такое направление уже есть.")
+    await state.clear()
 
 
 # ============================================================
@@ -166,8 +280,7 @@ async def addr_add_start(callback: CallbackQuery, state: FSMContext):
         return
 
     await callback.message.answer(
-        "📍 Введите адрес:\n\n"
-        "Пример: ул. Подольских Курсантов, 16-А (Школа № 657)",
+        "📍 Введите адрес:\n\nПример: ул. Подольских Курсантов, 16-А (Школа № 657)",
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(AddressStates.add)
@@ -238,7 +351,6 @@ async def start_time_del(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("start_time_info_"))
 async def start_time_info(callback: CallbackQuery):
-    """Просто показывает информацию — заглушка для кнопки с названием времени."""
     await callback.answer("Нажмите 🗑, чтобы удалить это время.", show_alert=False)
 
 
@@ -263,14 +375,9 @@ async def start_time_add_process(message: Message, state: FSMContext):
         return
 
     time_str = message.text.strip()
-
-    # Валидация формата
     parts = time_str.replace(".", ":").split(":")
     if len(parts) != 2 or not all(p.strip().isdigit() for p in parts):
-        await message.answer(
-            "⚠️ Неверный формат. Введите время как `20:00`.",
-            parse_mode="Markdown"
-        )
+        await message.answer("⚠️ Неверный формат. Введите как `20:00`.", parse_mode="Markdown")
         return
 
     result = add_start_time(time_str)
@@ -330,7 +437,6 @@ async def duration_del(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("duration_info_"))
 async def duration_info(callback: CallbackQuery):
-    """Заглушка для кнопки с названием длительности."""
     await callback.answer("Нажмите 🗑, чтобы удалить.", show_alert=False)
 
 
@@ -341,8 +447,7 @@ async def duration_add_start(callback: CallbackQuery, state: FSMContext):
         return
 
     await callback.message.answer(
-        "⏱ Введите длительность в часах (целое число, например «2»):\n\n"
-        "Потом попросим ввести текстовую метку (например, «2 часа»).",
+        "⏱ Введите длительность в часах (целое число, например «2»):",
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(DurationStates.add_hours)
@@ -380,10 +485,7 @@ async def duration_add_label(message: Message, state: FSMContext):
 
     result = add_duration(hours, label)
     if result:
-        await message.answer(
-            f"✅ Длительность *{label}* ({hours}ч) добавлена.",
-            parse_mode="Markdown"
-        )
+        await message.answer(f"✅ Длительность *{label}* ({hours}ч) добавлена.", parse_mode="Markdown")
     else:
         await message.answer("ℹ️ Такая длительность уже есть.")
     await state.clear()

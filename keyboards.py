@@ -12,7 +12,6 @@ from config import TOPICS
 # ============================================================
 
 def get_main_menu():
-    """Главное меню (для админа)."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📅 Создать событие", callback_data="new_event")],
         [InlineKeyboardButton(text="✏️ Редактировать событие", callback_data="edit_event_list")],
@@ -23,7 +22,6 @@ def get_main_menu():
 
 
 def get_cancel_keyboard():
-    """Кнопка отмены для пошагового диалога."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")],
     ])
@@ -31,7 +29,6 @@ def get_cancel_keyboard():
 
 
 def get_skip_keyboard():
-    """Кнопка пропуска шага."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⏭ Пропустить", callback_data="skip")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")],
@@ -44,7 +41,6 @@ def get_skip_keyboard():
 # ============================================================
 
 def get_publish_keyboard(event_id):
-    """Кнопка публикации события (с ID события)."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="📤 Опубликовать в группу",
@@ -56,7 +52,6 @@ def get_publish_keyboard(event_id):
 
 
 def get_admin_event_keyboard(event_id):
-    """Кнопки для админа под событием."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📋 Список участников", callback_data=f"list_{event_id}")],
         [InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit_{event_id}")],
@@ -66,7 +61,6 @@ def get_admin_event_keyboard(event_id):
 
 
 def get_admin_list_keyboard(event_id, participants):
-    """Клавиатура со списком участников и кнопками выписки (для админа)."""
     buttons = []
     for p in participants:
         user_id, username, full_name, status, paid = p
@@ -89,7 +83,6 @@ def get_admin_list_keyboard(event_id, participants):
 # ============================================================
 
 def get_event_keyboard(event_id):
-    """Кнопки для участников под событием (без кнопки Список участников)."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Я в деле", callback_data=f"join_{event_id}")],
         [InlineKeyboardButton(text="💳 Оплатил", callback_data=f"paid_{event_id}")],
@@ -99,7 +92,6 @@ def get_event_keyboard(event_id):
 
 
 def get_topics_keyboard(event_id):
-    """Клавиатура с выбором топика для публикации (с ID события)."""
     buttons = []
     for key, topic in TOPICS.items():
         buttons.append([
@@ -115,7 +107,6 @@ def get_topics_keyboard(event_id):
 
 
 def get_payment_confirm_keyboard(event_id, user_id):
-    """Кнопки подтверждения оплаты для админа."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
@@ -132,17 +123,41 @@ def get_payment_confirm_keyboard(event_id, user_id):
 
 
 # ============================================================
-# НОВОЕ: Выбор адреса при создании события
+# Выбор НАПРАВЛЕНИЯ при создании события
+# ============================================================
+
+def get_directions_keyboard(directions):
+    """
+    Клавиатура выбора направления.
+    directions: список кортежей (id, name, is_default) из db.get_directions()
+    """
+    buttons = []
+    for dir_id, name, is_default in directions:
+        label = name if len(name) <= 40 else name[:37] + "..."
+        prefix = "⭐ " if is_default else "🏐 "
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{prefix}{label}",
+                callback_data=f"direction_pick_{dir_id}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(text="✏️ Ввести направление вручную", callback_data="direction_manual")
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+# ============================================================
+# Выбор АДРЕСА при создании события
 # ============================================================
 
 def get_addresses_keyboard(addresses, default_address=None):
-    """
-    Клавиатура выбора адреса.
-    addresses: список кортежей (id, address, is_default) из db.get_addresses()
-    """
     buttons = []
     for addr_id, address, is_default in addresses:
-        # Обрезаем длинный адрес для кнопки
         label = address if len(address) <= 40 else address[:37] + "..."
         prefix = "⭐ " if is_default else "📍 "
         buttons.append([
@@ -162,16 +177,11 @@ def get_addresses_keyboard(addresses, default_address=None):
 
 
 # ============================================================
-# НОВОЕ: Выбор времени при создании события
+# Выбор ВРЕМЕНИ НАЧАЛА при создании события
 # ============================================================
 
 def get_start_times_keyboard(start_times):
-    """
-    Клавиатура выбора времени начала.
-    start_times: список кортежей (id, time) из db.get_start_times()
-    """
     buttons = []
-    # По 2 кнопки в ряд
     row = []
     for time_id, time_str in start_times:
         row.append(InlineKeyboardButton(
@@ -194,10 +204,6 @@ def get_start_times_keyboard(start_times):
 
 
 def get_durations_keyboard(durations):
-    """
-    Клавиатура выбора длительности.
-    durations: список кортежей (id, hours, label) из db.get_durations()
-    """
     buttons = []
     row = []
     for dur_id, hours, label in durations:
@@ -218,12 +224,12 @@ def get_durations_keyboard(durations):
 
 
 # ============================================================
-# НОВОЕ: Админ-меню управления библиотеками
+# Админ-меню управления библиотеками
 # ============================================================
 
 def get_settings_menu():
-    """Меню настроек (⚙️ Настройки)."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏐 Направления", callback_data="manage_directions")],
         [InlineKeyboardButton(text="📍 Адреса", callback_data="manage_addresses")],
         [InlineKeyboardButton(text="🕐 Время начала", callback_data="manage_start_times")],
         [InlineKeyboardButton(text="⏱ Длительность", callback_data="manage_durations")],
@@ -232,11 +238,57 @@ def get_settings_menu():
     return keyboard
 
 
+# --- Управление НАПРАВЛЕНИЯМИ ---
+
+def get_directions_management_keyboard(directions):
+    buttons = []
+    for dir_id, name, is_default in directions:
+        label = name if len(name) <= 35 else name[:32] + "..."
+        prefix = "⭐" if is_default else "🏐"
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{prefix} {label}",
+                callback_data=f"direction_info_{dir_id}"
+            ),
+            InlineKeyboardButton(
+                text="🗑",
+                callback_data=f"direction_del_{dir_id}"
+            ),
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(text="➕ Добавить направление", callback_data="direction_add")
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="🔙 Назад", callback_data="settings_menu")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_direction_info_keyboard(direction_id, is_default):
+    buttons = []
+    if not is_default:
+        buttons.append([
+            InlineKeyboardButton(
+                text="⭐ Сделать основным",
+                callback_data=f"direction_set_default_{direction_id}"
+            )
+        ])
+    buttons.append([
+        InlineKeyboardButton(
+            text="🗑 Удалить направление",
+            callback_data=f"direction_del_{direction_id}"
+        )
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="🔙 К списку направлений", callback_data="manage_directions")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+# --- Управление АДРЕСАМИ ---
+
 def get_address_management_keyboard(addresses):
-    """
-    Клавиатура управления адресами (для админа).
-    addresses: список кортежей (id, address, is_default)
-    """
     buttons = []
     for addr_id, address, is_default in addresses:
         label = address if len(address) <= 35 else address[:32] + "..."
@@ -262,9 +314,6 @@ def get_address_management_keyboard(addresses):
 
 
 def get_address_info_keyboard(address_id, is_default):
-    """
-    Клавиатура для конкретного адреса — что с ним делать.
-    """
     buttons = []
     if not is_default:
         buttons.append([
@@ -285,24 +334,21 @@ def get_address_info_keyboard(address_id, is_default):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+# --- Управление ВРЕМЕНАМИ НАЧАЛА ---
+
 def get_start_times_management_keyboard(start_times):
-    """
-    Клавиатура управления временами начала (для админа).
-    start_times: список кортежей (id, time)
-    """
     buttons = []
-    row = []
     for time_id, time_str in start_times:
-        row.append(InlineKeyboardButton(
-            text=f"🕐 {time_str}",
-            callback_data=f"start_time_info_{time_id}"
-        ))
-        row.append(InlineKeyboardButton(
-            text="🗑",
-            callback_data=f"start_time_del_{time_id}"
-        ))
-        buttons.append(row)
-        row = []
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"🕐 {time_str}",
+                callback_data=f"start_time_info_{time_id}"
+            ),
+            InlineKeyboardButton(
+                text="🗑",
+                callback_data=f"start_time_del_{time_id}"
+            ),
+        ])
 
     buttons.append([
         InlineKeyboardButton(text="➕ Добавить время", callback_data="start_time_add")
@@ -313,11 +359,9 @@ def get_start_times_management_keyboard(start_times):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+# --- Управление ДЛИТЕЛЬНОСТЯМИ ---
+
 def get_durations_management_keyboard(durations):
-    """
-    Клавиатура управления длительностями (для админа).
-    durations: список кортежей (id, hours, label)
-    """
     buttons = []
     for dur_id, hours, label in durations:
         buttons.append([

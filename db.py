@@ -3,7 +3,7 @@
 
 Отвечает за работу с базой данных SQLite.
 Содержит функции для создания событий, добавления участников,
-работы с библиотекой адресов, временем начала и длительностями.
+работы с библиотеками: адреса, направления, время начала, длительности.
 """
 import sqlite3
 import logging
@@ -16,7 +16,6 @@ DB_PATH = "events.db"
 def get_connection():
     """Возвращает подключение к БД с включёнными foreign_keys."""
     conn = sqlite3.connect(DB_PATH)
-    # ВАЖНО: без этой строки ON DELETE CASCADE не работает!
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -62,7 +61,7 @@ def init_db():
             );
         """)
 
-        # Таблица адресов (библиотека)
+        # Таблица адресов
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS addresses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,7 +71,18 @@ def init_db():
             );
         """)
 
-        # Таблица времён начала события
+        # Таблица направлений
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS directions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                is_default INTEGER DEFAULT 0,
+                sort_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # Таблица времён начала
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS start_times (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,7 +92,7 @@ def init_db():
             );
         """)
 
-        # Таблица длительностей события
+        # Таблица длительностей
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS durations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,7 +105,6 @@ def init_db():
 
         conn.commit()
 
-        # Заполняем дефолтами, если таблицы пустые
         _seed_defaults(cursor)
         conn.commit()
 
@@ -112,7 +121,21 @@ def _seed_defaults(cursor):
             INSERT INTO addresses (address, is_default)
             VALUES (?, 1)
         """, ("ул. Подольских Курсантов, 16-А (Школа № 657)",))
-        logger.info("Добавлен дефолтный адрес.")
+        logger.info("Added default address.")
+
+    # Дефолтные направления
+    cursor.execute("SELECT COUNT(*) FROM directions;")
+    if cursor.fetchone()[0] == 0:
+        default_directions = [
+            ("Волейбол классический", 1, 1),
+            ("Волейбол пляжный", 0, 2),
+            ("Падл", 0, 3),
+        ]
+        cursor.executemany("""
+            INSERT INTO directions (name, is_default, sort_order)
+            VALUES (?, ?, ?)
+        """, default_directions)
+        logger.info("Added default directions.")
 
     # Дефолтные времена начала
     cursor.execute("SELECT COUNT(*) FROM start_times;")
@@ -147,7 +170,6 @@ def _seed_defaults(cursor):
 # ============================================================
 
 def create_event(title, direction, place, date, time, max_participants, price, payment_info, comment):
-    """Создаёт новое событие и возвращает его ID."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -159,7 +181,6 @@ def create_event(title, direction, place, date, time, max_participants, price, p
 
 
 def get_event(event_id):
-    """Возвращает событие по ID."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM events WHERE id = ?", (event_id,))
@@ -167,7 +188,6 @@ def get_event(event_id):
 
 
 def get_event_message_id(event_id):
-    """Возвращает message_id опубликованного сообщения события (или None)."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT message_id FROM events WHERE id = ?", (event_id,))
@@ -176,7 +196,6 @@ def get_event_message_id(event_id):
 
 
 def get_all_events():
-    """Возвращает список всех активных событий."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM events WHERE status = 'active' ORDER BY date, time")
@@ -184,7 +203,6 @@ def get_all_events():
 
 
 def mark_event_published(event_id, thread_id, message_id):
-    """Помечает событие как опубликованное + сохраняет thread_id и message_id."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -196,7 +214,6 @@ def mark_event_published(event_id, thread_id, message_id):
 
 
 def is_event_published(event_id):
-    """Проверяет, опубликовано ли событие."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT published FROM events WHERE id = ?", (event_id,))
@@ -205,28 +222,17 @@ def is_event_published(event_id):
 
 
 def delete_event(event_id):
-    """
-    Полностью удаляет событие и всех его участников.
-    Возвращает True, если событие было удалено, иначе False.
-    """
     with get_connection() as conn:
         cursor = conn.cursor()
-
         cursor.execute("DELETE FROM participants WHERE event_id = ?", (event_id,))
         participants_deleted = cursor.rowcount
-
         cursor.execute("DELETE FROM events WHERE id = ?", (event_id,))
         event_deleted = cursor.rowcount
-
         conn.commit()
-
         if event_deleted == 0:
-            logger.warning(f"Событие {event_id} не найдено в БД при удалении.")
+            logger.warning(f"Event {event_id} not found for deletion.")
             return False
-
-        logger.info(
-            f"Событие {event_id} удалено. Участников удалено: {participants_deleted}."
-        )
+        logger.info(f"Event {event_id} deleted. Participants deleted: {participants_deleted}.")
         return True
 
 
@@ -235,10 +241,6 @@ def delete_event(event_id):
 # ============================================================
 
 def add_participant(event_id, user_id, username, full_name):
-    """
-    Добавляет участника в резерв.
-    Возвращает True при успехе, False если уже записан.
-    """
     with get_connection() as conn:
         cursor = conn.cursor()
         try:
@@ -255,17 +257,13 @@ def add_participant(event_id, user_id, username, full_name):
             )
             real = cursor.fetchone()
             if real:
-                logger.warning(f"Пользователь {user_id} уже записан на событие {event_id}.")
+                logger.warning(f"User {user_id} already registered for event {event_id}.")
                 return False
-            else:
-                logger.error(
-                    f"IntegrityError без реальной записи: event={event_id}, user={user_id}."
-                )
-                return False
+            logger.error(f"IntegrityError without real record: event={event_id}, user={user_id}.")
+            return False
 
 
 def mark_paid(event_id, user_id):
-    """Отмечает участника как оплатившего."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -275,7 +273,6 @@ def mark_paid(event_id, user_id):
 
 
 def confirm_payment(event_id, user_id):
-    """Админ подтверждает оплату — участник в основной состав."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -285,7 +282,6 @@ def confirm_payment(event_id, user_id):
 
 
 def get_participants(event_id):
-    """Возвращает список всех участников события."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -297,7 +293,6 @@ def get_participants(event_id):
 
 
 def remove_participant(event_id, user_id):
-    """Удаляет участника из события."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -307,7 +302,6 @@ def remove_participant(event_id, user_id):
 
 
 def add_to_main(event_id, user_id):
-    """Вручную добавляет участника в основной состав."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -322,7 +316,6 @@ def add_to_main(event_id, user_id):
 # ============================================================
 
 def get_addresses():
-    """Возвращает список всех адресов, дефолтный — первым."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -334,28 +327,19 @@ def get_addresses():
 
 
 def get_default_address():
-    """Возвращает адрес по умолчанию (или None)."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT address FROM addresses WHERE is_default = 1 LIMIT 1
-        """)
+        cursor.execute("SELECT address FROM addresses WHERE is_default = 1 LIMIT 1")
         row = cursor.fetchone()
         return row[0] if row else None
 
 
 def add_address(address, is_default=False):
-    """
-    Добавляет адрес в библиотеку.
-    Если is_default=True — снимает флаг с других адресов.
-    Возвращает ID нового адреса или None, если такой уже есть.
-    """
     with get_connection() as conn:
         cursor = conn.cursor()
         try:
             if is_default:
                 cursor.execute("UPDATE addresses SET is_default = 0;")
-
             cursor.execute("""
                 INSERT INTO addresses (address, is_default)
                 VALUES (?, ?)
@@ -363,32 +347,91 @@ def add_address(address, is_default=False):
             conn.commit()
             return cursor.lastrowid
         except sqlite3.IntegrityError:
-            logger.warning(f"Адрес уже существует: {address}")
+            logger.warning(f"Address already exists: {address}")
             return None
 
 
 def delete_address(address_id):
-    """Удаляет адрес по ID. Возвращает True при успехе."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM addresses WHERE id = ?", (address_id,))
         deleted = cursor.rowcount
         conn.commit()
         if deleted == 0:
-            logger.warning(f"Адрес {address_id} не найден при удалении.")
+            logger.warning(f"Address {address_id} not found for deletion.")
             return False
-        logger.info(f"Адрес {address_id} удалён.")
         return True
 
 
 def set_default_address(address_id):
-    """Делает указанный адрес дефолтным."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("UPDATE addresses SET is_default = 0;")
         cursor.execute("UPDATE addresses SET is_default = 1 WHERE id = ?", (address_id,))
         conn.commit()
-        logger.info(f"Адрес {address_id} установлен как дефолтный.")
+
+
+# ============================================================
+# БИБЛИОТЕКА НАПРАВЛЕНИЙ
+# ============================================================
+
+def get_directions():
+    """Возвращает список направлений, дефолтное — первым."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, name, is_default
+            FROM directions
+            ORDER BY is_default DESC, sort_order ASC, id ASC
+        """)
+        return cursor.fetchall()
+
+
+def get_default_direction():
+    """Возвращает направление по умолчанию (или None)."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM directions WHERE is_default = 1 LIMIT 1")
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+
+def add_direction(name, is_default=False, sort_order=100):
+    """Добавляет направление в библиотеку."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            if is_default:
+                cursor.execute("UPDATE directions SET is_default = 0;")
+            cursor.execute("""
+                INSERT INTO directions (name, is_default, sort_order)
+                VALUES (?, ?, ?)
+            """, (name, 1 if is_default else 0, sort_order))
+            conn.commit()
+            return cursor.lastrowid
+        except sqlite3.IntegrityError:
+            logger.warning(f"Direction already exists: {name}")
+            return None
+
+
+def delete_direction(direction_id):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM directions WHERE id = ?", (direction_id,))
+        deleted = cursor.rowcount
+        conn.commit()
+        if deleted == 0:
+            logger.warning(f"Direction {direction_id} not found for deletion.")
+            return False
+        return True
+
+
+def set_default_direction(direction_id):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE directions SET is_default = 0;")
+        cursor.execute("UPDATE directions SET is_default = 1 WHERE id = ?", (direction_id,))
+        conn.commit()
 
 
 # ============================================================
@@ -396,28 +439,21 @@ def set_default_address(address_id):
 # ============================================================
 
 def get_start_times():
-    """Возвращает список времён начала, отсортированных по sort_order."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, time
-            FROM start_times
+            SELECT id, time FROM start_times
             ORDER BY sort_order ASC, id ASC
         """)
         return cursor.fetchall()
 
 
 def add_start_time(time: str, sort_order: int = 100):
-    """
-    Добавляет время начала в библиотеку.
-    Возвращает ID нового времени или None, если такое уже есть.
-    """
     with get_connection() as conn:
         cursor = conn.cursor()
         try:
             cursor.execute("""
-                INSERT INTO start_times (time, sort_order)
-                VALUES (?, ?)
+                INSERT INTO start_times (time, sort_order) VALUES (?, ?)
             """, (time, sort_order))
             conn.commit()
             return cursor.lastrowid
@@ -427,17 +463,12 @@ def add_start_time(time: str, sort_order: int = 100):
 
 
 def delete_start_time(time_id: int):
-    """Удаляет время начала по ID. Возвращает True при успехе."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM start_times WHERE id = ?", (time_id,))
         deleted = cursor.rowcount
         conn.commit()
-        if deleted == 0:
-            logger.warning(f"Start time {time_id} not found for deletion.")
-            return False
-        logger.info(f"Start time {time_id} deleted.")
-        return True
+        return deleted > 0
 
 
 # ============================================================
@@ -445,28 +476,21 @@ def delete_start_time(time_id: int):
 # ============================================================
 
 def get_durations():
-    """Возвращает список длительностей, отсортированных по sort_order."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, hours, label
-            FROM durations
+            SELECT id, hours, label FROM durations
             ORDER BY sort_order ASC, id ASC
         """)
         return cursor.fetchall()
 
 
 def add_duration(hours: int, label: str, sort_order: int = 100):
-    """
-    Добавляет длительность в библиотеку.
-    Возвращает ID новой длительности или None, если такая уже есть.
-    """
     with get_connection() as conn:
         cursor = conn.cursor()
         try:
             cursor.execute("""
-                INSERT INTO durations (hours, label, sort_order)
-                VALUES (?, ?, ?)
+                INSERT INTO durations (hours, label, sort_order) VALUES (?, ?, ?)
             """, (hours, label, sort_order))
             conn.commit()
             return cursor.lastrowid
@@ -476,17 +500,12 @@ def add_duration(hours: int, label: str, sort_order: int = 100):
 
 
 def delete_duration(duration_id: int):
-    """Удаляет длительность по ID. Возвращает True при успехе."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM durations WHERE id = ?", (duration_id,))
         deleted = cursor.rowcount
         conn.commit()
-        if deleted == 0:
-            logger.warning(f"Duration {duration_id} not found for deletion.")
-            return False
-        logger.info(f"Duration {duration_id} deleted.")
-        return True
+        return deleted > 0
 
 
 # ============================================================
@@ -494,15 +513,11 @@ def delete_duration(duration_id: int):
 # ============================================================
 
 def calculate_end_time(start_time: str, duration_hours: int) -> str:
-    """
-    Считает время окончания события.
-    Пример: calculate_end_time("20:00", 2) → "22:00"
-    Если сумма больше 24 часов — возвращает время со сдвигом (например, 23:00 + 3 = 02:00).
-    """
+    """20:00 + 2 → 22:00"""
     try:
         h, m = map(int, start_time.split(":"))
         total = h * 60 + m + duration_hours * 60
         return f"{(total // 60) % 24:02d}:{total % 60:02d}"
     except Exception as e:
-        logger.error(f"calculate_end_time error: start_time={start_time}, duration={duration_hours}, err={e}")
+        logger.error(f"calculate_end_time error: start={start_time}, dur={duration_hours}, err={e}")
         return "??:??"
