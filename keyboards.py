@@ -382,3 +382,17 @@ def get_durations_management_keyboard(durations):
         InlineKeyboardButton(text="🔙 Назад", callback_data="settings_menu")
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# ============================================================
+# КАЛЕНДАРЬ (для выбора даты)
+# ============================================================
+
+from aiogram_calendar import SimpleCalendar
+
+
+async def get_calendar_keyboard():
+    """
+    Возвращает inline-клавиатуру с календарём (русская локаль).
+    Используется на шаге выбора даты события.
+    """
+    return await SimpleCalendar(locale='ru_RU').start_calendar()

@@ -2,18 +2,22 @@
 Модуль handlers/admin/events.py
 
 Содержит обработчики для работы с событиями:
-- Создание события (/new_event): направление, адрес, дата, время, длительность
+- Создание события (/new_event): направление, адрес, дата (календарь), время, длительность
 - Публикация события в топики
 - Удаление событий
 - Отмена диалога
 """
 import logging
+from datetime import datetime
+
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram import Bot
+
+from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
 from config import GROUP_ID, TOPICS
 
@@ -32,6 +36,7 @@ from keyboards import (
     get_publish_keyboard, get_event_keyboard, get_topics_keyboard,
     get_directions_keyboard, get_addresses_keyboard,
     get_start_times_keyboard, get_durations_keyboard,
+    get_calendar_keyboard,
 )
 
 from .common import is_admin, build_event_summary
@@ -39,6 +44,29 @@ from .common import is_admin, build_event_summary
 logger = logging.getLogger(__name__)
 
 router = Router(name="admin_events")
+
+
+# ============================================================
+# ЛОКАЛИЗАЦИЯ ДАТЫ
+# ============================================================
+
+WEEKDAYS_RU = [
+    "Понедельник", "Вторник", "Среда", "Четверг",
+    "Пятница", "Суббота", "Воскресенье",
+]
+
+MONTHS_RU = {
+    1: "января", 2: "февраля", 3: "марта", 4: "апреля",
+    5: "мая", 6: "июня", 7: "июля", 8: "августа",
+    9: "сентября", 10: "октября", 11: "ноября", 12: "декабря",
+}
+
+
+def format_date_ru(date: datetime) -> str:
+    """Форматирует дату как «20 сентября 2026 (Воскресенье)»."""
+    weekday = WEEKDAYS_RU[date.weekday()]
+    month = MONTHS_RU[date.month]
+    return f"{date.day} {month} {date.year} ({weekday})"
 
 
 class NewEventStates(StatesGroup):
@@ -57,7 +85,72 @@ class NewEventStates(StatesGroup):
 
 
 # ============================================================
-# СОЗДАНИЕ СОБЫТИЯ
+# ХЕЛПЕРЫ: ПОКАЗ ШАГОВ
+# ============================================================
+
+async def _ask_for_direction(target_message, state: FSMContext):
+    directions = get_directions()
+    if directions:
+        await target_message.answer(
+            "🏐 *Выберите направление:*\n\n⭐ — основное.",
+            parse_mode="Markdown",
+            reply_markup=get_directions_keyboard(directions)
+        )
+        await state.set_state(NewEventStates.direction)
+    else:
+        await target_message.answer(
+            "🏐 Введите направление вручную (например, «Волейбол классический»):",
+            reply_markup=get_cancel_keyboard()
+        )
+        await state.set_state(NewEventStates.direction_manual)
+
+
+async def _ask_for_place(target_message, state: FSMContext):
+    addresses = get_addresses()
+    if addresses:
+        await target_message.answer(
+            "📍 *Выберите место проведения:*\n\n⭐ — основной адрес.",
+            parse_mode="Markdown",
+            reply_markup=get_addresses_keyboard(addresses)
+        )
+        await state.set_state(NewEventStates.place)
+    else:
+        await target_message.answer(
+            "📍 Введите адрес вручную:",
+            reply_markup=get_cancel_keyboard()
+        )
+        await state.set_state(NewEventStates.place_manual)
+
+
+async def _ask_for_date(target_message, state: FSMContext):
+    """Показывает календарь для выбора даты."""
+    await target_message.answer(
+        "📅 *Выберите дату:*",
+        parse_mode="Markdown",
+        reply_markup=await get_calendar_keyboard()
+    )
+    await state.set_state(NewEventStates.date)
+
+
+async def _ask_for_duration(target_message, state: FSMContext):
+    durations = get_durations()
+    if durations:
+        await target_message.answer(
+            "⏱ *Выберите длительность:*",
+            parse_mode="Markdown",
+            reply_markup=get_durations_keyboard(durations)
+        )
+        await state.set_state(NewEventStates.time_duration)
+    else:
+        await target_message.answer(
+            "⏱ Введите длительность в часах (число, например «2»):",
+            reply_markup=get_cancel_keyboard()
+        )
+        await state.set_state(NewEventStates.time_duration)
+
+
+# ============================================================
+# СТАРТ СОЗДАНИЯ
 # ============================================================
 
 @router.message(Command("new_event"))
@@ -79,24 +172,9 @@ async def new_event_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-async def _ask_for_direction(target_message, state: FSMContext):
-    """Показывает клавиатуру выбора направления."""
-    directions = get_directions()
-    if directions:
-        await target_message.answer(
-            "🏐 *Выберите направление:*\n\n"
-            "⭐ — основное.",
-            parse_mode="Markdown",
-            reply_markup=get_directions_keyboard(directions)
-        )
-        await state.set_state(NewEventStates.direction)
-    else:
-        await target_message.answer(
-            "🏐 Введите направление вручную (например, «Волейбол классический»):",
-            reply_markup=get_cancel_keyboard()
-        )
-        await state.set_state(NewEventStates.direction_manual)
-
+# ============================================================
+# НАПРАВЛЕНИЕ
+# ============================================================
 
 @router.callback_query(F.data.startswith("direction_pick_"))
 async def direction_picked(callback: CallbackQuery, state: FSMContext):
@@ -109,7 +187,6 @@ async def direction_picked(callback: CallbackQuery, state: FSMContext):
         return
 
     await state.update_data(direction=chosen[1])
-
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -135,8 +212,7 @@ async def process_direction_manual(message: Message, state: FSMContext):
     await state.update_data(direction=direction, pending_direction=direction)
 
     await message.answer(
-        f"🏐 Направление: *{direction}*\n\n"
-        f"Сохранить его в библиотеку направлений?",
+        f"🏐 Направление: *{direction}*\n\nСохранить в библиотеку направлений?",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Сохранить", callback_data="direction_save_yes")],
@@ -149,14 +225,11 @@ async def process_direction_manual(message: Message, state: FSMContext):
 async def direction_save_yes(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     direction = data.get("pending_direction")
-
     if direction:
-        result = add_direction(direction)
-        if result:
+        if add_direction(direction):
             await callback.message.answer("✅ Направление сохранено в библиотеку.")
         else:
             await callback.message.answer("ℹ️ Такое направление уже есть.")
-
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -179,23 +252,6 @@ async def direction_save_no(callback: CallbackQuery, state: FSMContext):
 # АДРЕС
 # ============================================================
 
-async def _ask_for_place(target_message, state: FSMContext):
-    addresses = get_addresses()
-    if addresses:
-        await target_message.answer(
-            "📍 *Выберите место проведения:*\n\n⭐ — основной адрес.",
-            parse_mode="Markdown",
-            reply_markup=get_addresses_keyboard(addresses)
-        )
-        await state.set_state(NewEventStates.place)
-    else:
-        await target_message.answer(
-            "📍 Введите адрес вручную:",
-            reply_markup=get_cancel_keyboard()
-        )
-        await state.set_state(NewEventStates.place_manual)
-
-
 @router.callback_query(F.data.startswith("addr_pick_"))
 async def address_picked(callback: CallbackQuery, state: FSMContext):
     addr_id = int(callback.data.split("_")[2])
@@ -212,11 +268,7 @@ async def address_picked(callback: CallbackQuery, state: FSMContext):
     except Exception:
         pass
     await callback.message.answer(f"📍 Место: *{chosen[1]}*", parse_mode="Markdown")
-    await callback.message.answer(
-        "📅 Введите дату (например, «20 сентября 2026»):",
-        reply_markup=get_cancel_keyboard()
-    )
-    await state.set_state(NewEventStates.date)
+    await _ask_for_date(callback.message, state)
     await callback.answer()
 
 
@@ -249,23 +301,16 @@ async def process_place_manual(message: Message, state: FSMContext):
 async def address_save_yes(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     address = data.get("pending_address")
-
     if address:
-        result = add_address(address)
-        if result:
+        if add_address(address):
             await callback.message.answer("✅ Адрес сохранён в библиотеку.")
         else:
-            await callback.message.answer("ℹ️ Такой адрес уже есть в библиотеке.")
-
+            await callback.message.answer("ℹ️ Такой адрес уже есть.")
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    await callback.message.answer(
-        "📅 Введите дату (например, «20 сентября 2026»):",
-        reply_markup=get_cancel_keyboard()
-    )
-    await state.set_state(NewEventStates.date)
+    await _ask_for_date(callback.message, state)
     await callback.answer()
 
 
@@ -275,36 +320,49 @@ async def address_save_no(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    await callback.message.answer(
-        "📅 Введите дату (например, «20 сентября 2026»):",
-        reply_markup=get_cancel_keyboard()
-    )
-    await state.set_state(NewEventStates.date)
+    await _ask_for_date(callback.message, state)
     await callback.answer()
 
 
 # ============================================================
-# ДАТА
+# ДАТА (КАЛЕНДАРЬ)
 # ============================================================
 
-@router.message(NewEventStates.date)
-async def process_date(message: Message, state: FSMContext):
-    await state.update_data(date=message.text)
+@router.callback_query(SimpleCalendarCallback.filter())
+async def process_calendar_date(callback: CallbackQuery, callback_data: dict, state: FSMContext):
+    """Обработка выбора даты в календаре."""
+    selected, date = await SimpleCalendar(locale='ru_RU').process_selection(callback, callback_data)
+    if not selected:
+        await callback.answer()
+        return
+
+    formatted = format_date_ru(date)
+    await state.update_data(date=formatted)
+
+    try:
+        await callback.message.edit_text(
+            f"📅 Дата: *{formatted}*",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        await callback.message.answer(f"📅 Дата: *{formatted}*", parse_mode="Markdown")
 
     start_times = get_start_times()
     if start_times:
-        await message.answer(
+        await callback.message.answer(
             "🕐 *Выберите время начала:*",
             parse_mode="Markdown",
             reply_markup=get_start_times_keyboard(start_times)
         )
         await state.set_state(NewEventStates.time_start)
     else:
-        await message.answer(
+        await callback.message.answer(
             "🕐 Введите время начала вручную (например, «20:00»):",
             reply_markup=get_cancel_keyboard()
         )
         await state.set_state(NewEventStates.time_start_manual)
+
+    await callback.answer()
 
 
 # ============================================================
@@ -364,14 +422,11 @@ async def process_time_start_manual(message: Message, state: FSMContext):
 async def time_start_save_yes(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     time_str = data.get("pending_start_time")
-
     if time_str:
-        result = add_start_time(time_str)
-        if result:
+        if add_start_time(time_str):
             await callback.message.answer(f"✅ Время *{time_str}* сохранено.", parse_mode="Markdown")
         else:
             await callback.message.answer("ℹ️ Такое время уже есть.")
-
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -393,23 +448,6 @@ async def time_start_save_no(callback: CallbackQuery, state: FSMContext):
 # ============================================================
 # ДЛИТЕЛЬНОСТЬ
 # ============================================================
-
-async def _ask_for_duration(target_message, state: FSMContext):
-    durations = get_durations()
-    if durations:
-        await target_message.answer(
-            "⏱ *Выберите длительность:*",
-            parse_mode="Markdown",
-            reply_markup=get_durations_keyboard(durations)
-        )
-        await state.set_state(NewEventStates.time_duration)
-    else:
-        await target_message.answer(
-            "⏱ Введите длительность в часах (число, например «2»):",
-            reply_markup=get_cancel_keyboard()
-        )
-        await state.set_state(NewEventStates.time_duration)
-
 
 @router.callback_query(F.data.startswith("duration_pick_"))
 async def duration_picked(callback: CallbackQuery, state: FSMContext):
