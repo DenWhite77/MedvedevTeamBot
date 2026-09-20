@@ -2,11 +2,12 @@
 Модуль handlers/admin/events.py
 
 Создание события: направление, адрес (с картой), дата (календарь), время, длительность.
-Публикация события в топики с отправкой точки на карте.
+Публикация события в топики с превью Яндекс.Карт.
 Удаление событий.
 """
 import logging
 from datetime import datetime
+from urllib.parse import quote
 
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -23,7 +24,7 @@ from db import (
     create_event, get_event, get_event_message_id, get_all_events,
     mark_event_published, is_event_published, delete_event as db_delete_event,
     get_directions, add_direction,
-    get_addresses, add_address, get_address_coords_by_text,
+    get_addresses, add_address,
     get_start_times, add_start_time,
     get_durations, add_duration,
     calculate_end_time,
@@ -301,13 +302,9 @@ async def address_save_yes(callback: CallbackQuery, state: FSMContext):
     address = data.get("pending_address")
 
     if address:
-        # Геокодируем и сохраняем (асинхронно)
         addr_id = await add_address(address)
         if addr_id:
-            await callback.message.answer(
-                "✅ Адрес сохранён (координаты определены).",
-                parse_mode="Markdown"
-            )
+            await callback.message.answer("✅ Адрес сохранён (координаты определены).")
         else:
             await callback.message.answer("ℹ️ Такой адрес уже есть в библиотеке.")
 
@@ -609,7 +606,7 @@ async def cancel_callback(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================
-# ПУБЛИКАЦИЯ (с картой)
+# ПУБЛИКАЦИЯ (с превью Яндекс.Карт)
 # ============================================================
 
 @router.callback_query(F.data.startswith("publish_event_"))
@@ -643,12 +640,10 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
         return
 
     place = event[3]
-    lat, lon = get_address_coords_by_text(place)
 
-    # Ссылка на Яндекс.Карты (если есть координаты)
-    yandex_link = ""
-    if lat is not None and lon is not None:
-        yandex_link = f"\n🗺 [Открыть на Яндекс.Картах](https://yandex.ru/maps/?pt={lon},{lat}&z=16&l=map)"
+    # Ссылка на Яндекс.Карты — БЕЗ координат (текстовый поиск),
+    # чтобы Telegram показывал превью Яндекса, а не подменял на Google Maps.
+    yandex_link = f"\n🗺 [Открыть на Яндекс.Картах](https://yandex.ru/maps/?text={quote(place)})"
 
     text = (
         f"📅 *{event[1]}*\n\n"
@@ -664,19 +659,16 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
     )
 
     try:
-        # Отправляем основное сообщение (без превью ссылок и без Venue)
         if topic["thread_id"] is None:
             sent = await bot.send_message(
                 chat_id=GROUP_ID, text=text, parse_mode="Markdown",
-                reply_markup=get_event_keyboard(event_id),
-                link_preview_options=LinkPreviewOptions(is_disabled=True)
+                reply_markup=get_event_keyboard(event_id)
             )
         else:
             sent = await bot.send_message(
                 chat_id=GROUP_ID, message_thread_id=topic["thread_id"],
                 text=text, parse_mode="Markdown",
-                reply_markup=get_event_keyboard(event_id),
-                link_preview_options=LinkPreviewOptions(is_disabled=True)
+                reply_markup=get_event_keyboard(event_id)
             )
 
         mark_event_published(event_id, topic["thread_id"], sent.message_id)
