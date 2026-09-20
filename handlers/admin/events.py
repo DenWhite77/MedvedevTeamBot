@@ -12,7 +12,7 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LinkPreviewOptions
 from aiogram import Bot
 
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
@@ -664,41 +664,19 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
     )
 
     try:
-        # 1. Если есть координаты — отправляем карту (Venue) отдельным сообщением
-        if lat is not None and lon is not None:
-            try:
-                if topic["thread_id"] is None:
-                    await bot.send_venue(
-                        chat_id=GROUP_ID,
-                        latitude=lat,
-                        longitude=lon,
-                        title=event[1],
-                        address=place
-                    )
-                else:
-                    await bot.send_venue(
-                        chat_id=GROUP_ID,
-                        message_thread_id=topic["thread_id"],
-                        latitude=lat,
-                        longitude=lon,
-                        title=event[1],
-                        address=place
-                    )
-                logger.info(f"Venue sent: lat={lat}, lon={lon}, place='{place}'")
-            except Exception as e:
-                logger.warning(f"Cannot send venue: {e}")
-
-        # 2. Отправляем основное сообщение с кнопками
+        # Отправляем основное сообщение (без превью ссылок и без Venue)
         if topic["thread_id"] is None:
             sent = await bot.send_message(
                 chat_id=GROUP_ID, text=text, parse_mode="Markdown",
-                reply_markup=get_event_keyboard(event_id)
+                reply_markup=get_event_keyboard(event_id),
+                link_preview_options=LinkPreviewOptions(is_disabled=True)
             )
         else:
             sent = await bot.send_message(
                 chat_id=GROUP_ID, message_thread_id=topic["thread_id"],
                 text=text, parse_mode="Markdown",
-                reply_markup=get_event_keyboard(event_id)
+                reply_markup=get_event_keyboard(event_id),
+                link_preview_options=LinkPreviewOptions(is_disabled=True)
             )
 
         mark_event_published(event_id, topic["thread_id"], sent.message_id)
