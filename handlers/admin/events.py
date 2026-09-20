@@ -330,8 +330,14 @@ async def address_save_no(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(SimpleCalendarCallback.filter())
 async def process_calendar_date(callback: CallbackQuery, callback_data: dict, state: FSMContext):
-    """Обработка выбора даты в календаре."""
-    selected, date = await SimpleCalendar(locale='ru_RU').process_selection(callback, callback_data)
+    """Обработка выбора даты в календаре (русская локаль с fallback)."""
+    try:
+        calendar = SimpleCalendar(locale='ru_RU')
+        selected, date = await calendar.process_selection(callback, callback_data)
+    except Exception:
+        calendar = SimpleCalendar()
+        selected, date = await calendar.process_selection(callback, callback_data)
+
     if not selected:
         await callback.answer()
         return

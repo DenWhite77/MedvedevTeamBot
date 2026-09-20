@@ -391,8 +391,8 @@ from aiogram_calendar import SimpleCalendar
 
 
 async def get_calendar_keyboard():
-    """
-    Возвращает inline-клавиатуру с календарём (русская локаль).
-    Используется на шаге выбора даты события.
-    """
-    return await SimpleCalendar(locale='ru_RU').start_calendar()
+    """Возвращает inline-клавиатуру с календарём (русская локаль с fallback)."""
+    try:
+        return await SimpleCalendar(locale='ru_RU').start_calendar()
+    except Exception:
+        return await SimpleCalendar().start_calendar()
