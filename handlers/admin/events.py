@@ -1,11 +1,9 @@
 """
 Модуль handlers/admin/events.py
 
-Содержит обработчики для работы с событиями:
-- Создание события (/new_event): направление, адрес, дата (календарь), время, длительность
-- Публикация события в топики
-- Удаление событий
-- Отмена диалога
+Создание события: направление, адрес (с картой), дата (календарь), время, длительность.
+Публикация события в топики с отправкой точки на карте.
+Удаление событий.
 """
 import logging
 from datetime import datetime
@@ -25,7 +23,7 @@ from db import (
     create_event, get_event, get_event_message_id, get_all_events,
     mark_event_published, is_event_published, delete_event as db_delete_event,
     get_directions, add_direction,
-    get_addresses, add_address,
+    get_addresses, add_address, get_address_coords_by_text,
     get_start_times, add_start_time,
     get_durations, add_duration,
     calculate_end_time,
@@ -85,7 +83,7 @@ class NewEventStates(StatesGroup):
 
 
 # ============================================================
-# ХЕЛПЕРЫ: ПОКАЗ ШАГОВ
+# ХЕЛПЕРЫ
 # ============================================================
 
 async def _ask_for_direction(target_message, state: FSMContext):
@@ -99,7 +97,7 @@ async def _ask_for_direction(target_message, state: FSMContext):
         await state.set_state(NewEventStates.direction)
     else:
         await target_message.answer(
-            "🏐 Введите направление вручную (например, «Волейбол классический»):",
+            "🏐 Введите направление вручную:",
             reply_markup=get_cancel_keyboard()
         )
         await state.set_state(NewEventStates.direction_manual)
@@ -123,7 +121,6 @@ async def _ask_for_place(target_message, state: FSMContext):
 
 
 async def _ask_for_date(target_message, state: FSMContext):
-    """Показывает календарь для выбора даты."""
     await target_message.answer(
         "📅 *Выберите дату:*",
         parse_mode="Markdown",
@@ -143,7 +140,7 @@ async def _ask_for_duration(target_message, state: FSMContext):
         await state.set_state(NewEventStates.time_duration)
     else:
         await target_message.answer(
-            "⏱ Введите длительность в часах (число, например «2»):",
+            "⏱ Введите длительность в часах (например, «2»):",
             reply_markup=get_cancel_keyboard()
         )
         await state.set_state(NewEventStates.time_duration)
@@ -165,7 +162,7 @@ async def new_event_start(message: Message, state: FSMContext):
 @router.callback_query(F.data == "new_event")
 async def new_event_callback(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ У вас нет прав на это действие.", show_alert=True)
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
         return
     await state.clear()
     await _ask_for_direction(callback.message, state)
@@ -212,7 +209,7 @@ async def process_direction_manual(message: Message, state: FSMContext):
     await state.update_data(direction=direction, pending_direction=direction)
 
     await message.answer(
-        f"🏐 Направление: *{direction}*\n\nСохранить в библиотеку направлений?",
+        f"🏐 Направление: *{direction}*\n\nСохранить в библиотеку?",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Сохранить", callback_data="direction_save_yes")],
@@ -227,7 +224,7 @@ async def direction_save_yes(callback: CallbackQuery, state: FSMContext):
     direction = data.get("pending_direction")
     if direction:
         if add_direction(direction):
-            await callback.message.answer("✅ Направление сохранено в библиотеку.")
+            await callback.message.answer("✅ Направление сохранено.")
         else:
             await callback.message.answer("ℹ️ Такое направление уже есть.")
     try:
@@ -288,7 +285,8 @@ async def process_place_manual(message: Message, state: FSMContext):
     await state.update_data(place=address, pending_address=address)
 
     await message.answer(
-        f"📍 Адрес: *{address}*\n\nСохранить в библиотеку адресов?",
+        f"📍 Адрес: *{address}*\n\nСохранить в библиотеку адресов?\n"
+        f"_(координаты подтянутся автоматически)_",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Сохранить", callback_data="addr_save_yes")],
@@ -301,11 +299,18 @@ async def process_place_manual(message: Message, state: FSMContext):
 async def address_save_yes(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     address = data.get("pending_address")
+
     if address:
-        if add_address(address):
-            await callback.message.answer("✅ Адрес сохранён в библиотеку.")
+        # Геокодируем и сохраняем (асинхронно)
+        addr_id = await add_address(address)
+        if addr_id:
+            await callback.message.answer(
+                "✅ Адрес сохранён (координаты определены).",
+                parse_mode="Markdown"
+            )
         else:
-            await callback.message.answer("ℹ️ Такой адрес уже есть.")
+            await callback.message.answer("ℹ️ Такой адрес уже есть в библиотеке.")
+
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -410,12 +415,12 @@ async def process_time_start_manual(message: Message, state: FSMContext):
     time_str = message.text.strip()
     parts = time_str.replace(".", ":").split(":")
     if len(parts) != 2 or not all(p.strip().isdigit() for p in parts):
-        await message.answer("⚠️ Неверный формат. Введите время как `20:00`.", parse_mode="Markdown")
+        await message.answer("⚠️ Неверный формат. Введите как `20:00`.", parse_mode="Markdown")
         return
 
     await state.update_data(time_start=time_str, pending_start_time=time_str)
     await message.answer(
-        f"🕐 Время начала: *{time_str}*\n\nСохранить в библиотеку времён?",
+        f"🕐 Время начала: *{time_str}*\n\nСохранить в библиотеку?",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Сохранить", callback_data="time_start_save_yes")],
@@ -564,7 +569,7 @@ async def _finalize_event(message_or_callback, state: FSMContext, is_callback: b
     target = message_or_callback.message if is_callback else message_or_callback
     await target.answer(summary, parse_mode="Markdown", reply_markup=get_publish_keyboard(event_id))
     await target.answer(
-        f"✅ Событие создано! ID: `{event_id}`.\nТеперь его можно опубликовать в группе.",
+        f"✅ Событие создано! ID: `{event_id}`.\nТеперь его можно опубликовать.",
         parse_mode="Markdown"
     )
     await state.clear()
@@ -604,7 +609,7 @@ async def cancel_callback(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================
-# ПУБЛИКАЦИЯ
+# ПУБЛИКАЦИЯ (с картой)
 # ============================================================
 
 @router.callback_query(F.data.startswith("publish_event_"))
@@ -629,7 +634,7 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
         return
 
     if is_event_published(event_id):
-        await callback.answer("⚠️ Это событие уже опубликовано!", show_alert=True)
+        await callback.answer("⚠️ Событие уже опубликовано!", show_alert=True)
         return
 
     event = get_event(event_id)
@@ -637,19 +642,53 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
         await callback.answer("⚠️ Событие не найдено.", show_alert=True)
         return
 
+    place = event[3]
+    lat, lon = get_address_coords_by_text(place)
+
+    # Ссылка на Яндекс.Карты (если есть координаты)
+    yandex_link = ""
+    if lat is not None and lon is not None:
+        yandex_link = f"\n🗺 [Открыть на Яндекс.Картах](https://yandex.ru/maps/?pt={lon},{lat}&z=16&l=map)"
+
     text = (
         f"📅 *{event[1]}*\n\n"
-        f"📍 *Место:* {event[3]}\n"
+        f"📍 *Место:* {place}\n"
         f"📅 *Дата:* {event[4]}\n"
         f"🕐 *Время:* {event[5]}\n"
         f"👥 *Макс. участников:* {event[6]}\n"
         f"💰 *Стоимость:* {event[7]} ₽\n"
         f"💳 *Оплата:* {event[8]}\n"
-        f"📝 *Комментарий:* {event[9] or '—'}\n\n"
+        f"📝 *Комментарий:* {event[9] or '—'}"
+        f"{yandex_link}\n\n"
         f"Нажмите «✅ Я в деле», чтобы записаться!"
     )
 
     try:
+        # 1. Если есть координаты — отправляем карту (Venue) отдельным сообщением
+        if lat is not None and lon is not None:
+            try:
+                if topic["thread_id"] is None:
+                    await bot.send_venue(
+                        chat_id=GROUP_ID,
+                        latitude=lat,
+                        longitude=lon,
+                        title=event[1],
+                        address=place
+                    )
+                else:
+                    await bot.send_venue(
+                        chat_id=GROUP_ID,
+                        message_thread_id=topic["thread_id"],
+                        latitude=lat,
+                        longitude=lon,
+                        title=event[1],
+                        address=place
+                    )
+                logger.info(f"Venue sent: lat={lat}, lon={lon}, place='{place}'")
+            except Exception as e:
+                logger.warning(f"Cannot send venue: {e}")
+
+        # 2. Отправляем основное сообщение с кнопками
         if topic["thread_id"] is None:
             sent = await bot.send_message(
                 chat_id=GROUP_ID, text=text, parse_mode="Markdown",
@@ -662,21 +701,13 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
                 reply_markup=get_event_keyboard(event_id)
             )
 
-        logger.info(
-            f"=== PUBLICATION ===\n"
-            f"event_id={event_id}\n"
-            f"GROUP_ID={GROUP_ID}\n"
-            f"sent.message_id={sent.message_id}\n"
-            f"sent.chat.id={sent.chat.id}"
-        )
-
         mark_event_published(event_id, topic["thread_id"], sent.message_id)
         await callback.message.answer(f"✅ Событие опубликовано в топик {topic['name']}!")
 
         try:
             await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception as e:
-            logger.warning(f"Cannot remove keyboard: {e}")
+        except Exception:
+            pass
     except Exception as e:
         await callback.message.answer(f"❌ Ошибка при публикации: {e}")
     await callback.answer()
@@ -756,8 +787,8 @@ async def delete_event(callback: CallbackQuery, bot: Bot):
 async def close_list(callback: CallbackQuery):
     try:
         await callback.message.delete()
-    except Exception as e:
-        logger.warning(f"Cannot delete message: {e}")
+    except Exception:
+        pass
     await callback.answer()
 
 
@@ -766,5 +797,5 @@ async def edit_event_list(callback: CallbackQuery, bot: Bot):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ У вас нет прав.", show_alert=True)
         return
-    await callback.message.answer("✏️ Редактирование событий — функция в разработке.")
+    await callback.message.answer("✏️ Редактирование событий — в разработке.")
     await callback.answer()

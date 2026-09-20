@@ -3,14 +3,22 @@
 
 Отвечает за работу с базой данных SQLite.
 Содержит функции для создания событий, добавления участников,
-работы с библиотеками: адреса, направления, время начала, длительности.
+работы с библиотеками: адреса (с геокодированием), направления,
+время начала, длительности.
 """
 import sqlite3
 import logging
+import os
+from urllib.parse import quote
+
+import aiohttp
 
 logger = logging.getLogger(__name__)
 
 DB_PATH = "events.db"
+
+# Ключ Яндекс.Геокодера из .env
+YANDEX_GEOCODER_API_KEY = os.getenv("YANDEX_GEOCODER_API_KEY", "")
 
 
 def get_connection():
@@ -61,11 +69,13 @@ def init_db():
             );
         """)
 
-        # Таблица адресов
+        # Таблица адресов (с координатами)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS addresses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 address TEXT NOT NULL UNIQUE,
+                latitude REAL,
+                longitude REAL,
                 is_default INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -104,24 +114,43 @@ def init_db():
         """)
 
         conn.commit()
-
         _seed_defaults(cursor)
         conn.commit()
 
         logger.info("База данных инициализирована.")
 
 
+def _migrate_addresses_columns(cursor):
+    """
+    Добавляет колонки latitude/longitude в таблицу addresses,
+    если их ещё нет (миграция со старой схемы).
+    """
+    cursor.execute("PRAGMA table_info(addresses);")
+    columns = [row[1] for row in cursor.fetchall()]
+
+    if "latitude" not in columns:
+        cursor.execute("ALTER TABLE addresses ADD COLUMN latitude REAL;")
+        logger.info("Added column addresses.latitude")
+
+    if "longitude" not in columns:
+        cursor.execute("ALTER TABLE addresses ADD COLUMN longitude REAL;")
+        logger.info("Added column addresses.longitude")
+
+
 def _seed_defaults(cursor):
     """Заполняет таблицы дефолтными значениями (только если они пустые)."""
 
-    # Дефолтный адрес
+    # Миграция колонок
+    _migrate_addresses_columns(cursor)
+
+    # Дефолтный адрес (координаты подтянутся миграцией)
     cursor.execute("SELECT COUNT(*) FROM addresses;")
     if cursor.fetchone()[0] == 0:
         cursor.execute("""
             INSERT INTO addresses (address, is_default)
             VALUES (?, 1)
         """, ("ул. Подольских Курсантов, 16-А (Школа № 657)",))
-        logger.info("Added default address.")
+        logger.info("Added default address (coordinates pending migration).")
 
     # Дефолтные направления
     cursor.execute("SELECT COUNT(*) FROM directions;")
@@ -163,6 +192,52 @@ def _seed_defaults(cursor):
             INSERT INTO durations (hours, label, sort_order) VALUES (?, ?, ?)
         """, default_durations)
         logger.info("Added default durations.")
+
+
+# ============================================================
+# ГЕОКОДЕР
+# ============================================================
+
+async def geocode_address(address: str) -> tuple:
+    """
+    Геокодирует адрес через Яндекс.Геокодер.
+    Возвращает (latitude, longitude) или (None, None) при ошибке.
+    """
+    if not YANDEX_GEOCODER_API_KEY:
+        logger.warning("YANDEX_GEOCODER_API_KEY не задан — геокодирование пропущено.")
+        return None, None
+
+    url = (
+        f"https://geocode-maps.yandex.ru/1.x/"
+        f"?apikey={YANDEX_GEOCODER_API_KEY}"
+        f"&geocode={quote(address)}"
+        f"&format=json&results=1"
+    )
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    logger.warning(f"Geocoder HTTP {resp.status} for '{address}'")
+                    return None, None
+
+                data = await resp.json()
+
+                members = (
+                    data.get("response", {})
+                    .get("GeoObjectCollection", {})
+                    .get("featureMember", [])
+                )
+                if not members:
+                    logger.warning(f"Geocoder: no results for '{address}'")
+                    return None, None
+
+                pos = members[0]["GeoObject"]["Point"]["pos"]
+                lon_str, lat_str = pos.split(" ")
+                return float(lat_str), float(lon_str)
+    except Exception as e:
+        logger.error(f"Geocoder error for '{address}': {e}")
+        return None, None
 
 
 # ============================================================
@@ -255,11 +330,8 @@ def add_participant(event_id, user_id, username, full_name):
                 "SELECT 1 FROM participants WHERE event_id = ? AND user_id = ?",
                 (event_id, user_id)
             )
-            real = cursor.fetchone()
-            if real:
+            if cursor.fetchone():
                 logger.warning(f"User {user_id} already registered for event {event_id}.")
-                return False
-            logger.error(f"IntegrityError without real record: event={event_id}, user={user_id}.")
             return False
 
 
@@ -316,6 +388,7 @@ def add_to_main(event_id, user_id):
 # ============================================================
 
 def get_addresses():
+    """Возвращает список адресов: id, address, is_default."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -326,6 +399,30 @@ def get_addresses():
         return cursor.fetchall()
 
 
+def get_address_full(address_id: int):
+    """Возвращает полную запись адреса: id, address, latitude, longitude, is_default."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, address, latitude, longitude, is_default
+            FROM addresses WHERE id = ?
+        """, (address_id,))
+        return cursor.fetchone()
+
+
+def get_address_coords_by_text(address: str):
+    """Возвращает (latitude, longitude) по тексту адреса или (None, None)."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT latitude, longitude FROM addresses WHERE address = ?
+        """, (address,))
+        row = cursor.fetchone()
+        if row and row[0] is not None:
+            return row[0], row[1]
+        return None, None
+
+
 def get_default_address():
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -334,18 +431,26 @@ def get_default_address():
         return row[0] if row else None
 
 
-def add_address(address, is_default=False):
+async def add_address(address: str, is_default: bool = False):
+    """
+    Добавляет адрес с автоматическим геокодированием.
+    Возвращает ID или None, если такой адрес уже есть.
+    """
+    lat, lon = await geocode_address(address)
+
     with get_connection() as conn:
         cursor = conn.cursor()
         try:
             if is_default:
                 cursor.execute("UPDATE addresses SET is_default = 0;")
             cursor.execute("""
-                INSERT INTO addresses (address, is_default)
-                VALUES (?, ?)
-            """, (address, 1 if is_default else 0))
+                INSERT INTO addresses (address, latitude, longitude, is_default)
+                VALUES (?, ?, ?, ?)
+            """, (address, lat, lon, 1 if is_default else 0))
             conn.commit()
-            return cursor.lastrowid
+            addr_id = cursor.lastrowid
+            logger.info(f"Address added: id={addr_id}, address='{address}', lat={lat}, lon={lon}")
+            return addr_id
         except sqlite3.IntegrityError:
             logger.warning(f"Address already exists: {address}")
             return None
@@ -357,10 +462,7 @@ def delete_address(address_id):
         cursor.execute("DELETE FROM addresses WHERE id = ?", (address_id,))
         deleted = cursor.rowcount
         conn.commit()
-        if deleted == 0:
-            logger.warning(f"Address {address_id} not found for deletion.")
-            return False
-        return True
+        return deleted > 0
 
 
 def set_default_address(address_id):
@@ -371,24 +473,50 @@ def set_default_address(address_id):
         conn.commit()
 
 
+async def migrate_addresses():
+    """
+    Одноразовая миграция: для всех адресов без координат — запрашивает
+    их у геокодера и сохраняет. Вызывать вручную или при старте.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, address FROM addresses WHERE latitude IS NULL OR longitude IS NULL")
+        rows = cursor.fetchall()
+
+    if not rows:
+        logger.info("Migrate addresses: nothing to do.")
+        return
+
+    for addr_id, address in rows:
+        lat, lon = await geocode_address(address)
+        if lat is not None and lon is not None:
+            with get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE addresses SET latitude = ?, longitude = ?
+                    WHERE id = ?
+                """, (lat, lon, addr_id))
+                conn.commit()
+            logger.info(f"Migrated address id={addr_id}: lat={lat}, lon={lon}")
+        else:
+            logger.warning(f"Cannot geocode address id={addr_id}: '{address}'")
+
+
 # ============================================================
 # БИБЛИОТЕКА НАПРАВЛЕНИЙ
 # ============================================================
 
 def get_directions():
-    """Возвращает список направлений, дефолтное — первым."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, name, is_default
-            FROM directions
+            SELECT id, name, is_default FROM directions
             ORDER BY is_default DESC, sort_order ASC, id ASC
         """)
         return cursor.fetchall()
 
 
 def get_default_direction():
-    """Возвращает направление по умолчанию (или None)."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM directions WHERE is_default = 1 LIMIT 1")
@@ -397,7 +525,6 @@ def get_default_direction():
 
 
 def add_direction(name, is_default=False, sort_order=100):
-    """Добавляет направление в библиотеку."""
     with get_connection() as conn:
         cursor = conn.cursor()
         try:
@@ -410,7 +537,6 @@ def add_direction(name, is_default=False, sort_order=100):
             conn.commit()
             return cursor.lastrowid
         except sqlite3.IntegrityError:
-            logger.warning(f"Direction already exists: {name}")
             return None
 
 
@@ -420,10 +546,7 @@ def delete_direction(direction_id):
         cursor.execute("DELETE FROM directions WHERE id = ?", (direction_id,))
         deleted = cursor.rowcount
         conn.commit()
-        if deleted == 0:
-            logger.warning(f"Direction {direction_id} not found for deletion.")
-            return False
-        return True
+        return deleted > 0
 
 
 def set_default_direction(direction_id):
@@ -441,10 +564,7 @@ def set_default_direction(direction_id):
 def get_start_times():
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, time FROM start_times
-            ORDER BY sort_order ASC, id ASC
-        """)
+        cursor.execute("SELECT id, time FROM start_times ORDER BY sort_order ASC, id ASC")
         return cursor.fetchall()
 
 
@@ -452,13 +572,10 @@ def add_start_time(time: str, sort_order: int = 100):
     with get_connection() as conn:
         cursor = conn.cursor()
         try:
-            cursor.execute("""
-                INSERT INTO start_times (time, sort_order) VALUES (?, ?)
-            """, (time, sort_order))
+            cursor.execute("INSERT INTO start_times (time, sort_order) VALUES (?, ?)", (time, sort_order))
             conn.commit()
             return cursor.lastrowid
         except sqlite3.IntegrityError:
-            logger.warning(f"Start time already exists: {time}")
             return None
 
 
@@ -478,10 +595,7 @@ def delete_start_time(time_id: int):
 def get_durations():
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, hours, label FROM durations
-            ORDER BY sort_order ASC, id ASC
-        """)
+        cursor.execute("SELECT id, hours, label FROM durations ORDER BY sort_order ASC, id ASC")
         return cursor.fetchall()
 
 
@@ -495,7 +609,6 @@ def add_duration(hours: int, label: str, sort_order: int = 100):
             conn.commit()
             return cursor.lastrowid
         except sqlite3.IntegrityError:
-            logger.warning(f"Duration already exists: {hours}")
             return None
 
 
@@ -509,7 +622,7 @@ def delete_duration(duration_id: int):
 
 
 # ============================================================
-# УТИЛИТА: РАСЧЁТ ВРЕМЕНИ ОКОНЧАНИЯ
+# УТИЛИТА
 # ============================================================
 
 def calculate_end_time(start_time: str, duration_hours: int) -> str:
