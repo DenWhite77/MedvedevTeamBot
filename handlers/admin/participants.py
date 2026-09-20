@@ -9,7 +9,7 @@
 """
 import logging
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, LinkPreviewOptions
 from aiogram import Bot
 
 from config import GROUP_ID
@@ -97,7 +97,8 @@ async def remove_participant_handler(callback: CallbackQuery, bot: Bot):
                 message_id=message_id,
                 text=new_text,
                 parse_mode="Markdown",
-                reply_markup=get_event_keyboard(event_id)
+                reply_markup=get_event_keyboard(event_id),
+                link_preview_options=LinkPreviewOptions(is_disabled=True)
             )
         except Exception as e:
             logger.warning(f"Не удалось отредактировать сообщение: {e}")
@@ -155,7 +156,8 @@ async def confirm_payment_handler(callback: CallbackQuery, bot: Bot):
                 message_id=message_id,
                 text=new_text,
                 parse_mode="Markdown",
-                reply_markup=get_event_keyboard(event_id)
+                reply_markup=get_event_keyboard(event_id),
+                link_preview_options=LinkPreviewOptions(is_disabled=True)
             )
         except Exception as e:
             logger.warning(f"Не удалось отредактировать сообщение: {e}")
@@ -182,7 +184,7 @@ async def reject_payment_handler(callback: CallbackQuery, bot: Bot):
 
     logger.info(f"Админ отклонил оплату: event_id={event_id}, user_id={user_id}")
 
-    # Обновляем сообщение в группе — фикс бага «участник остаётся в списке»
+    # Обновляем сообщение в группе
     from handlers.user import format_event_message
     participants = get_participants(event_id)
     new_text = format_event_message(event, participants)
@@ -195,7 +197,8 @@ async def reject_payment_handler(callback: CallbackQuery, bot: Bot):
                 message_id=message_id,
                 text=new_text,
                 parse_mode="Markdown",
-                reply_markup=get_event_keyboard(event_id)
+                reply_markup=get_event_keyboard(event_id),
+                link_preview_options=LinkPreviewOptions(is_disabled=True)
             )
         except Exception as e:
             logger.warning(f"Не удалось обновить сообщение: {e}")
