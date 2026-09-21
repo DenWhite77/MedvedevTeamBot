@@ -704,6 +704,33 @@ async def payment_save_no(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(F.data == "skip")
+async def skip_comment(callback: CallbackQuery, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state == NewEventStates.comment:
+        await state.update_data(comment="")
+        await _finalize_event(callback, state, is_callback=True)
+        await callback.answer()
+    else:
+        await callback.answer(
+            "⚠️ Кнопка доступна только на шаге комментария.",
+            show_alert=True
+        )
+
+
+@router.message(Command("cancel"))
+async def cancel_handler(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Действие отменено.", reply_markup=get_main_menu())
+
+
+@router.callback_query(F.data == "cancel")
+async def cancel_callback(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.answer("Действие отменено.", reply_markup=get_main_menu())
+    await callback.answer()
+
+
 # ============================================================
 # ПУБЛИКАЦИЯ (с превью Яндекс.Карт)
 # ============================================================
