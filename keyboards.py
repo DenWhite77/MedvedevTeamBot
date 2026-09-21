@@ -233,6 +233,7 @@ def get_settings_menu():
         [InlineKeyboardButton(text="📍 Адреса", callback_data="manage_addresses")],
         [InlineKeyboardButton(text="🕐 Время начала", callback_data="manage_start_times")],
         [InlineKeyboardButton(text="⏱ Длительность", callback_data="manage_durations")],
+        [InlineKeyboardButton(text="💳 Способы оплаты", callback_data="manage_payments")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")],
     ])
     return keyboard
@@ -396,3 +397,92 @@ async def get_calendar_keyboard():
         return await SimpleCalendar(locale='ru_RU').start_calendar()
     except Exception:
         return await SimpleCalendar().start_calendar()
+
+# ============================================================
+# ОПЛАТА: ВЫБОР И УПРАВЛЕНИЕ
+# ============================================================
+
+def get_payment_methods_keyboard(methods):
+    """
+    Клавиатура выбора способа оплаты при создании события.
+    methods: список кортежей (id, name, bank, details, is_default)
+    """
+    buttons = []
+    for pm_id, name, bank, details, is_default in methods:
+        # Формируем текст кнопки: "⭐ Перевод на карту (Сбербанк или Т-банк)"
+        label = name
+        if bank:
+            label += f" ({bank})"
+        if len(label) > 45:
+            label = label[:42] + "..."
+        prefix = "⭐ " if is_default else "💳 "
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{prefix}{label}",
+                callback_data=f"payment_pick_{pm_id}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(text="✏️ Ввести вручную", callback_data="payment_manual")
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_payment_methods_management_keyboard(methods):
+    """
+    Клавиатура управления способами оплаты (в настройках).
+    methods: список кортежей (id, name, bank, details, is_default)
+    """
+    buttons = []
+    for pm_id, name, bank, details, is_default in methods:
+        label = name
+        if bank:
+            label += f" ({bank})"
+        if len(label) > 35:
+            label = label[:32] + "..."
+        prefix = "⭐" if is_default else "💳"
+
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{prefix} {label}",
+                callback_data=f"payment_info_{pm_id}"
+            ),
+            InlineKeyboardButton(
+                text="🗑",
+                callback_data=f"payment_del_{pm_id}"
+            ),
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(text="➕ Добавить способ оплаты", callback_data="payment_add")
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="🔙 Назад", callback_data="settings_menu")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_payment_method_info_keyboard(method_id, is_default):
+    """Клавиатура для конкретного способа оплаты."""
+    buttons = []
+    if not is_default:
+        buttons.append([
+            InlineKeyboardButton(
+                text="⭐ Сделать основным",
+                callback_data=f"payment_set_default_{method_id}"
+            )
+        ])
+    buttons.append([
+        InlineKeyboardButton(
+            text="🗑 Удалить",
+            callback_data=f"payment_del_{method_id}"
+        )
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="🔙 К списку", callback_data="manage_payments")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)

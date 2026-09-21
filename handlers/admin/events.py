@@ -7,7 +7,6 @@
 """
 import logging
 from datetime import datetime
-from urllib.parse import quote
 
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -28,6 +27,8 @@ from db import (
     get_start_times, add_start_time,
     get_durations, add_duration,
     calculate_end_time,
+    get_payment_methods, get_payment_method,
+    add_payment_method, format_payment_info,
 )
 
 from keyboards import (
@@ -35,7 +36,7 @@ from keyboards import (
     get_publish_keyboard, get_event_keyboard, get_topics_keyboard,
     get_directions_keyboard, get_addresses_keyboard,
     get_start_times_keyboard, get_durations_keyboard,
-    get_calendar_keyboard,
+    get_calendar_keyboard, get_payment_methods_keyboard,
 )
 
 from .common import is_admin, build_event_summary
@@ -79,7 +80,9 @@ class NewEventStates(StatesGroup):
     time_duration = State()
     max_participants = State()
     price = State()
-    payment_info = State()
+    payment_pick = State()          # выбор из библиотеки
+    payment_manual = State()        # ручной ввод (название)
+    payment_manual_details = State()  # ручной ввод (реквизиты, опционально)
     comment = State()
 
 
@@ -530,78 +533,175 @@ async def process_price(message: Message, state: FSMContext):
         await message.answer("⚠️ Пожалуйста, введите число.")
         return
     await state.update_data(price=int(message.text))
-    await message.answer(
-        "💳 Введите способ оплаты (например, «Перевод на карту»):",
-        reply_markup=get_cancel_keyboard()
+
+    methods = get_payment_methods()
+    if methods:
+        await message.answer(
+            "💳 *Выберите способ оплаты:*\n\n⭐ — основной.",
+            parse_mode="Markdown",
+            reply_markup=get_payment_methods_keyboard(methods)
+        )
+        await state.set_state(NewEventStates.payment_pick)
+    else:
+        await message.answer(
+            "💳 Введите название способа оплаты (например, «Перевод на карту»):",
+            reply_markup=get_cancel_keyboard()
+        )
+        await state.set_state(NewEventStates.payment_manual)
+
+
+@router.callback_query(F.data.startswith("payment_pick_"))
+async def payment_picked(callback: CallbackQuery, state: FSMContext):
+    """Админ выбрал способ оплаты из библиотеки."""
+    pm_id = int(callback.data.split("_")[2])
+    method = get_payment_method(pm_id)
+
+    if not method:
+        await callback.answer("⚠️ Способ не найден.", show_alert=True)
+        return
+
+    pm_id, name, bank, details, is_default = method
+    text_info = format_payment_info(name, bank, details)
+    await state.update_data(payment_info=text_info)
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await callback.message.answer(
+        f"💳 Оплата: *{name}*" + (f" {bank}" if bank else "") +
+        (f"\n`{details}`" if details else ""),
+        parse_mode="Markdown"
     )
-    await state.set_state(NewEventStates.payment_info)
-
-
-@router.message(NewEventStates.payment_info)
-async def process_payment_info(message: Message, state: FSMContext):
-    await state.update_data(payment_info=message.text)
-    await message.answer(
+    await callback.message.answer(
         "📝 Введите комментарий (или нажмите «Пропустить»):",
         reply_markup=get_skip_keyboard()
     )
     await state.set_state(NewEventStates.comment)
+    await callback.answer()
 
 
-async def _finalize_event(message_or_callback, state: FSMContext, is_callback: bool):
+@router.callback_query(F.data == "payment_manual")
+async def payment_manual_start(callback: CallbackQuery, state: FSMContext):
+    """Ручной ввод названия способа оплаты."""
+    await callback.message.answer(
+        "💳 Введите название способа оплаты:\n\nПример: Перевод на карту",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(NewEventStates.payment_manual)
+    await callback.answer()
+
+
+@router.message(NewEventStates.payment_manual)
+async def process_payment_manual(message: Message, state: FSMContext):
+    """Ручной ввод названия. Спрашиваем про банк/реквизиты."""
+    name = message.text.strip()
+    await state.update_data(pending_payment_name=name)
+
+    await message.answer(
+        f"💳 Название: *{name}*\n\n"
+        f"Введите банк и/или реквизиты (одной строкой).\n"
+        f"Пример: `Сбербанк или Т-банк +79267217588`\n\n"
+        f"Или нажмите «⏭ Пропустить».",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭ Пропустить", callback_data="payment_details_skip")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")],
+        ])
+    )
+    await state.set_state(NewEventStates.payment_manual_details)
+
+
+@router.message(NewEventStates.payment_manual_details)
+async def process_payment_manual_details(message: Message, state: FSMContext):
+    """Принимаем банк/реквизиты, сохраняем в библиотеку."""
+    details_line = message.text.strip()
     data = await state.get_data()
-    summary = build_event_summary(data)
+    name = data.get("pending_payment_name")
 
-    event_id = create_event(
-        title=data['direction'],
-        direction=data['direction'],
-        place=data['place'],
-        date=data['date'],
-        time=data['time'],
-        max_participants=data['max_participants'],
-        price=data['price'],
-        payment_info=data['payment_info'],
-        comment=data.get('comment', '')
+    # Простейший парсер: "Сбербанк или Т-банк +79267217588"
+    bank = details_line
+    details = None
+    if " " in details_line:
+        parts = details_line.rsplit(" ", 1)
+        if parts[-1].startswith("+") or parts[-1].replace("-", "").replace(" ", "").isdigit():
+            bank = parts[0]
+            details = parts[1]
+
+    text_info = format_payment_info(name, bank, details)
+    await state.update_data(payment_info=text_info, pending_payment_full=(name, bank, details))
+
+    await message.answer(
+        f"💳 Оплата: *{text_info}*\n\nСохранить в библиотеку?",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Сохранить", callback_data="payment_save_yes")],
+            [InlineKeyboardButton(text="➡️ Не сохранять", callback_data="payment_save_no")],
+        ])
     )
 
-    target = message_or_callback.message if is_callback else message_or_callback
-    await target.answer(summary, parse_mode="Markdown", reply_markup=get_publish_keyboard(event_id))
-    await target.answer(
-        f"✅ Событие создано! ID: `{event_id}`.\nТеперь его можно опубликовать.",
-        parse_mode="Markdown"
+
+@router.callback_query(F.data == "payment_details_skip")
+async def payment_details_skip(callback: CallbackQuery, state: FSMContext):
+    """Пропуск ввода банка/реквизитов."""
+    data = await state.get_data()
+    name = data.get("pending_payment_name")
+    text_info = format_payment_info(name, None, None)
+    await state.update_data(payment_info=text_info, pending_payment_full=(name, None, None))
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await callback.message.answer(
+        f"💳 Оплата: *{text_info}*\n\nСохранить в библиотеку?",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Сохранить", callback_data="payment_save_yes")],
+            [InlineKeyboardButton(text="➡️ Не сохранять", callback_data="payment_save_no")],
+        ])
     )
-    await state.clear()
+    await callback.answer()
 
 
-@router.message(NewEventStates.comment)
-async def process_comment(message: Message, state: FSMContext):
-    if message.text == "⏭ Пропустить":
-        await state.update_data(comment="")
-    else:
-        await state.update_data(comment=message.text)
-    await _finalize_event(message, state, is_callback=False)
+@router.callback_query(F.data == "payment_save_yes")
+async def payment_save_yes(callback: CallbackQuery, state: FSMContext):
+    """Сохраняем способ оплаты в библиотеку."""
+    data = await state.get_data()
+    full = data.get("pending_payment_full")
+    if full:
+        name, bank, details = full
+        if add_payment_method(name, bank, details):
+            await callback.message.answer("✅ Способ оплаты сохранён.")
+        else:
+            await callback.message.answer("ℹ️ Такой способ уже есть.")
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await callback.message.answer(
+        "📝 Введите комментарий (или нажмите «Пропустить»):",
+        reply_markup=get_skip_keyboard()
+    )
+    await state.set_state(NewEventStates.comment)
+    await callback.answer()
 
 
-@router.callback_query(F.data == "skip")
-async def skip_comment(callback: CallbackQuery, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state == NewEventStates.comment:
-        await state.update_data(comment="")
-        await _finalize_event(callback, state, is_callback=True)
-        await callback.answer()
-    else:
-        await callback.answer("⚠️ Кнопка доступна только на шаге комментария.", show_alert=True)
-
-
-@router.message(Command("cancel"))
-async def cancel_handler(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Действие отменено.", reply_markup=get_main_menu())
-
-
-@router.callback_query(F.data == "cancel")
-async def cancel_callback(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.answer("Действие отменено.", reply_markup=get_main_menu())
+@router.callback_query(F.data == "payment_save_no")
+async def payment_save_no(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer(
+        "📝 Введите комментарий (или нажмите «Пропустить»):",
+        reply_markup=get_skip_keyboard()
+    )
+    await state.set_state(NewEventStates.comment)
     await callback.answer()
 
 
@@ -639,24 +739,9 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
         await callback.answer("⚠️ Событие не найдено.", show_alert=True)
         return
 
-    place = event[3]
-
-    # Ссылка на Яндекс.Карты — БЕЗ координат (текстовый поиск),
-    # чтобы Telegram показывал превью Яндекса, а не подменял на Google Maps.
-    yandex_link = f"\n🗺 [Открыть на Яндекс.Картах](https://yandex.ru/maps/?text={quote(place)})"
-
-    text = (
-        f"📅 *{event[1]}*\n\n"
-        f"📍 *Место:* {place}\n"
-        f"📅 *Дата:* {event[4]}\n"
-        f"🕐 *Время:* {event[5]}\n"
-        f"👥 *Макс. участников:* {event[6]}\n"
-        f"💰 *Стоимость:* {event[7]} ₽\n"
-        f"💳 *Оплата:* {event[8]}\n"
-        f"📝 *Комментарий:* {event[9] or '—'}"
-        f"{yandex_link}\n\n"
-        f"Нажмите «✅ Я в деле», чтобы записаться!"
-    )
+    # Используем единую функцию сборки текста (со ссылкой на Яндекс.Карты)
+    from handlers.user import format_event_message
+    text = format_event_message(event, participants=[])
 
     try:
         if topic["thread_id"] is None:

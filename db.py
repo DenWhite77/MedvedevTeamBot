@@ -4,7 +4,7 @@
 Отвечает за работу с базой данных SQLite.
 Содержит функции для создания событий, добавления участников,
 работы с библиотеками: адреса (с геокодированием), направления,
-время начала, длительности.
+время начала, длительности, способы оплаты.
 """
 import sqlite3
 import logging
@@ -113,6 +113,20 @@ def init_db():
             );
         """)
 
+        # Таблица способов оплаты
+        cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS payment_methods (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        bank TEXT,
+                        details TEXT,
+                        is_default INTEGER DEFAULT 0,
+                        sort_order INTEGER DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (name, bank)
+                    );
+                """)
+
         conn.commit()
         _seed_defaults(cursor)
         conn.commit()
@@ -121,17 +135,12 @@ def init_db():
 
 
 def _migrate_addresses_columns(cursor):
-    """
-    Добавляет колонки latitude/longitude в таблицу addresses,
-    если их ещё нет (миграция со старой схемы).
-    """
+    """Добавляет колонки latitude/longitude в addresses, если их нет."""
     cursor.execute("PRAGMA table_info(addresses);")
     columns = [row[1] for row in cursor.fetchall()]
-
     if "latitude" not in columns:
         cursor.execute("ALTER TABLE addresses ADD COLUMN latitude REAL;")
         logger.info("Added column addresses.latitude")
-
     if "longitude" not in columns:
         cursor.execute("ALTER TABLE addresses ADD COLUMN longitude REAL;")
         logger.info("Added column addresses.longitude")
@@ -140,17 +149,16 @@ def _migrate_addresses_columns(cursor):
 def _seed_defaults(cursor):
     """Заполняет таблицы дефолтными значениями (только если они пустые)."""
 
-    # Миграция колонок
     _migrate_addresses_columns(cursor)
 
-    # Дефолтный адрес (координаты подтянутся миграцией)
+    # Дефолтный адрес
     cursor.execute("SELECT COUNT(*) FROM addresses;")
     if cursor.fetchone()[0] == 0:
         cursor.execute("""
             INSERT INTO addresses (address, is_default)
             VALUES (?, 1)
         """, ("ул. Подольских Курсантов, 16-А (Школа № 657)",))
-        logger.info("Added default address (coordinates pending migration).")
+        logger.info("Added default address.")
 
     # Дефолтные направления
     cursor.execute("SELECT COUNT(*) FROM directions;")
@@ -170,10 +178,7 @@ def _seed_defaults(cursor):
     cursor.execute("SELECT COUNT(*) FROM start_times;")
     if cursor.fetchone()[0] == 0:
         default_times = [
-            ("18:00", 1),
-            ("19:00", 2),
-            ("20:00", 3),
-            ("21:00", 4),
+            ("18:00", 1), ("19:00", 2), ("20:00", 3), ("21:00", 4),
         ]
         cursor.executemany("""
             INSERT INTO start_times (time, sort_order) VALUES (?, ?)
@@ -184,14 +189,25 @@ def _seed_defaults(cursor):
     cursor.execute("SELECT COUNT(*) FROM durations;")
     if cursor.fetchone()[0] == 0:
         default_durations = [
-            (1, "1 час", 1),
-            (2, "2 часа", 2),
-            (3, "3 часа", 3),
+            (1, "1 час", 1), (2, "2 часа", 2), (3, "3 часа", 3),
         ]
         cursor.executemany("""
             INSERT INTO durations (hours, label, sort_order) VALUES (?, ?, ?)
         """, default_durations)
         logger.info("Added default durations.")
+
+        # Дефолтные способы оплаты
+        cursor.execute("SELECT COUNT(*) FROM payment_methods;")
+        if cursor.fetchone()[0] == 0:
+            default_payment = [
+                ("Перевод на карту", "Сбербанк или Т-банк", "+79267217588", 1, 1),
+                ("Наличные", None, None, 0, 2),
+            ]
+            cursor.executemany("""
+                INSERT INTO payment_methods (name, bank, details, is_default, sort_order)
+                VALUES (?, ?, ?, ?, ?)
+            """, default_payment)
+            logger.info("Added default payment methods.")
 
 
 # ============================================================
@@ -199,10 +215,7 @@ def _seed_defaults(cursor):
 # ============================================================
 
 async def geocode_address(address: str) -> tuple:
-    """
-    Геокодирует адрес через Яндекс.Геокодер.
-    Возвращает (latitude, longitude) или (None, None) при ошибке.
-    """
+    """Геокодирует адрес через Яндекс.Геокодер."""
     if not YANDEX_GEOCODER_API_KEY:
         logger.warning("YANDEX_GEOCODER_API_KEY не задан — геокодирование пропущено.")
         return None, None
@@ -220,9 +233,7 @@ async def geocode_address(address: str) -> tuple:
                 if resp.status != 200:
                     logger.warning(f"Geocoder HTTP {resp.status} for '{address}'")
                     return None, None
-
                 data = await resp.json()
-
                 members = (
                     data.get("response", {})
                     .get("GeoObjectCollection", {})
@@ -231,7 +242,6 @@ async def geocode_address(address: str) -> tuple:
                 if not members:
                     logger.warning(f"Geocoder: no results for '{address}'")
                     return None, None
-
                 pos = members[0]["GeoObject"]["Point"]["pos"]
                 lon_str, lat_str = pos.split(" ")
                 return float(lat_str), float(lon_str)
@@ -281,8 +291,7 @@ def mark_event_published(event_id, thread_id, message_id):
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            UPDATE events
-            SET published = 1, thread_id = ?, message_id = ?
+            UPDATE events SET published = 1, thread_id = ?, message_id = ?
             WHERE id = ?
         """, (thread_id, message_id, event_id))
         conn.commit()
@@ -388,19 +397,16 @@ def add_to_main(event_id, user_id):
 # ============================================================
 
 def get_addresses():
-    """Возвращает список адресов: id, address, is_default."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, address, is_default
-            FROM addresses
+            SELECT id, address, is_default FROM addresses
             ORDER BY is_default DESC, id ASC
         """)
         return cursor.fetchall()
 
 
 def get_address_full(address_id: int):
-    """Возвращает полную запись адреса: id, address, latitude, longitude, is_default."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -411,12 +417,9 @@ def get_address_full(address_id: int):
 
 
 def get_address_coords_by_text(address: str):
-    """Возвращает (latitude, longitude) по тексту адреса или (None, None)."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT latitude, longitude FROM addresses WHERE address = ?
-        """, (address,))
+        cursor.execute("SELECT latitude, longitude FROM addresses WHERE address = ?", (address,))
         row = cursor.fetchone()
         if row and row[0] is not None:
             return row[0], row[1]
@@ -432,12 +435,7 @@ def get_default_address():
 
 
 async def add_address(address: str, is_default: bool = False):
-    """
-    Добавляет адрес с автоматическим геокодированием.
-    Возвращает ID или None, если такой адрес уже есть.
-    """
     lat, lon = await geocode_address(address)
-
     with get_connection() as conn:
         cursor = conn.cursor()
         try:
@@ -448,9 +446,7 @@ async def add_address(address: str, is_default: bool = False):
                 VALUES (?, ?, ?, ?)
             """, (address, lat, lon, 1 if is_default else 0))
             conn.commit()
-            addr_id = cursor.lastrowid
-            logger.info(f"Address added: id={addr_id}, address='{address}', lat={lat}, lon={lon}")
-            return addr_id
+            return cursor.lastrowid
         except sqlite3.IntegrityError:
             logger.warning(f"Address already exists: {address}")
             return None
@@ -474,10 +470,7 @@ def set_default_address(address_id):
 
 
 async def migrate_addresses():
-    """
-    Одноразовая миграция: для всех адресов без координат — запрашивает
-    их у геокодера и сохраняет. Вызывать вручную или при старте.
-    """
+    """Одноразовая миграция координат для адресов без lat/lon."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT id, address FROM addresses WHERE latitude IS NULL OR longitude IS NULL")
@@ -492,10 +485,7 @@ async def migrate_addresses():
         if lat is not None and lon is not None:
             with get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE addresses SET latitude = ?, longitude = ?
-                    WHERE id = ?
-                """, (lat, lon, addr_id))
+                cursor.execute("UPDATE addresses SET latitude = ?, longitude = ? WHERE id = ?", (lat, lon, addr_id))
                 conn.commit()
             logger.info(f"Migrated address id={addr_id}: lat={lat}, lon={lon}")
         else:
@@ -531,8 +521,7 @@ def add_direction(name, is_default=False, sort_order=100):
             if is_default:
                 cursor.execute("UPDATE directions SET is_default = 0;")
             cursor.execute("""
-                INSERT INTO directions (name, is_default, sort_order)
-                VALUES (?, ?, ?)
+                INSERT INTO directions (name, is_default, sort_order) VALUES (?, ?, ?)
             """, (name, 1 if is_default else 0, sort_order))
             conn.commit()
             return cursor.lastrowid
@@ -619,6 +608,93 @@ def delete_duration(duration_id: int):
         deleted = cursor.rowcount
         conn.commit()
         return deleted > 0
+
+
+# ============================================================
+# БИБЛИОТЕКА СПОСОБОВ ОПЛАТЫ
+# ============================================================
+
+def get_payment_methods():
+    """Возвращает список: id, name, bank, details, is_default."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, name, bank, details, is_default FROM payment_methods
+            ORDER BY is_default DESC, sort_order ASC, id ASC
+        """)
+        return cursor.fetchall()
+
+
+def get_payment_method(method_id: int):
+    """Возвращает одну запись: id, name, bank, details, is_default."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, name, bank, details, is_default
+            FROM payment_methods WHERE id = ?
+        """, (method_id,))
+        return cursor.fetchone()
+
+
+def get_default_payment_method():
+    """Возвращает (name, bank, details) дефолтного способа или (None, None, None)."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT name, bank, details FROM payment_methods
+            WHERE is_default = 1 LIMIT 1
+        """)
+        row = cursor.fetchone()
+        return row if row else (None, None, None)
+
+
+def format_payment_info(name: str, bank: str = None, details: str = None) -> str:
+    """
+    Формирует текст для поля payment_info:
+    "Перевод на карту Сбербанк или Т-банк\n+79267217588"
+    """
+    line1 = name
+    if bank:
+        line1 += f" {bank}"
+    if details:
+        return f"{line1}\n{details}"
+    return line1
+
+
+def add_payment_method(name: str, bank: str = None, details: str = None,
+                       is_default: bool = False, sort_order: int = 100):
+    """Добавляет способ оплаты. Возвращает ID или None, если такой уже есть."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            if is_default:
+                cursor.execute("UPDATE payment_methods SET is_default = 0;")
+            cursor.execute("""
+                INSERT INTO payment_methods (name, bank, details, is_default, sort_order)
+                VALUES (?, ?, ?, ?, ?)
+            """, (name, bank, details, 1 if is_default else 0, sort_order))
+            conn.commit()
+            return cursor.lastrowid
+        except sqlite3.IntegrityError:
+            logger.warning(f"Payment method already exists: {name} / {bank}")
+            return None
+
+
+def delete_payment_method(method_id: int):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM payment_methods WHERE id = ?", (method_id,))
+        deleted = cursor.rowcount
+        conn.commit()
+        return deleted > 0
+
+
+def set_default_payment_method(method_id: int):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE payment_methods SET is_default = 0;")
+        cursor.execute("UPDATE payment_methods SET is_default = 1 WHERE id = ?", (method_id,))
+        conn.commit()
 
 
 # ============================================================

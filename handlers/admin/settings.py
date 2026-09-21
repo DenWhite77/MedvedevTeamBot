@@ -11,13 +11,15 @@ import logging
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from db import (
     get_directions, add_direction, delete_direction, set_default_direction,
     get_addresses, add_address, delete_address, set_default_address,
     get_start_times, add_start_time, delete_start_time,
     get_durations, add_duration, delete_duration,
+    get_payment_methods, add_payment_method, delete_payment_method,
+    set_default_payment_method, format_payment_info,
 )
 
 from keyboards import (
@@ -25,6 +27,7 @@ from keyboards import (
     get_directions_management_keyboard, get_direction_info_keyboard,
     get_address_management_keyboard, get_address_info_keyboard,
     get_start_times_management_keyboard, get_durations_management_keyboard,
+    get_payment_methods_management_keyboard, get_payment_method_info_keyboard,
 )
 
 from .common import is_admin
@@ -49,6 +52,11 @@ class StartTimeStates(StatesGroup):
 class DurationStates(StatesGroup):
     add_hours = State()
     add_label = State()
+
+
+class PaymentStates(StatesGroup):
+    add_name = State()
+    add_details = State()
 
 
 # ============================================================
@@ -489,3 +497,180 @@ async def duration_add_label(message: Message, state: FSMContext):
     else:
         await message.answer("ℹ️ Такая длительность уже есть.")
     await state.clear()
+
+# ============================================================
+# УПРАВЛЕНИЕ СПОСОБАМИ ОПЛАТЫ
+# ============================================================
+
+@router.callback_query(F.data == "manage_payments")
+async def manage_payments(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    methods = get_payment_methods()
+    text = "💳 *Управление способами оплаты*\n\n"
+    if not methods:
+        text += "_Список пуст._"
+    else:
+        text += "⭐ — основной способ.\nНажмите на способ для действий."
+
+    try:
+        await callback.message.edit_text(
+            text,
+            parse_mode="Markdown",
+            reply_markup=get_payment_methods_management_keyboard(methods)
+        )
+    except Exception:
+        await callback.message.answer(
+            text,
+            parse_mode="Markdown",
+            reply_markup=get_payment_methods_management_keyboard(methods)
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("payment_info_"))
+async def payment_info(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    pm_id = int(callback.data.split("_")[2])
+    method = get_payment_method(pm_id)
+    if not method:
+        await callback.answer("⚠️ Способ не найден.", show_alert=True)
+        return
+
+    pm_id, name, bank, details, is_default = method
+
+    info_text = f"💳 *Способ оплаты:*\n{name}"
+    if bank:
+        info_text += f"\n🏦 Банк: {bank}"
+    if details:
+        info_text += f"\n📱 Реквизиты: `{details}`"
+    info_text += f"\n\n⭐ Основной: {'да' if is_default else 'нет'}"
+
+    await callback.message.edit_text(
+        info_text,
+        parse_mode="Markdown",
+        reply_markup=get_payment_method_info_keyboard(pm_id, bool(is_default))
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("payment_set_default_"))
+async def payment_set_default(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    pm_id = int(callback.data.split("_")[3])
+    set_default_payment_method(pm_id)
+    await callback.answer("⭐ Способ сделан основным.")
+    await manage_payments(callback)
+
+
+@router.callback_query(F.data.startswith("payment_del_"))
+async def payment_del(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    pm_id = int(callback.data.split("_")[2])
+    ok = delete_payment_method(pm_id)
+    if ok:
+        await callback.answer("🗑 Способ удалён.")
+    else:
+        await callback.answer("⚠️ Способ не найден.", show_alert=True)
+    await manage_payments(callback)
+
+
+@router.callback_query(F.data == "payment_add")
+async def payment_add_start(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    await callback.message.answer(
+        "💳 Введите название способа оплаты:\n\nПример: Перевод на карту",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(PaymentStates.add_name)
+    await callback.answer()
+
+
+@router.message(PaymentStates.add_name)
+async def payment_add_name(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ У вас нет прав.")
+        return
+
+    name = message.text.strip()
+    await state.update_data(name=name)
+
+    await message.answer(
+        f"💳 Название: *{name}*\n\n"
+        f"Введите банк и реквизиты одной строкой.\n"
+        f"Пример: `Сбербанк или Т-банк +79267217588`\n\n"
+        f"Или нажмите «⏭ Пропустить».",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭ Пропустить", callback_data="payment_add_skip")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")],
+        ])
+    )
+    await state.set_state(PaymentStates.add_details)
+
+
+@router.message(PaymentStates.add_details)
+async def payment_add_details(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ У вас нет прав.")
+        return
+
+    details_line = message.text.strip()
+    data = await state.get_data()
+    name = data.get("name")
+
+    # Парсер: "Сбербанк или Т-банк +79267217588"
+    bank = details_line
+    details = None
+    if " " in details_line:
+        parts = details_line.rsplit(" ", 1)
+        if parts[-1].startswith("+") or parts[-1].replace("-", "").replace(" ", "").isdigit():
+            bank = parts[0]
+            details = parts[1]
+
+    result = add_payment_method(name, bank, details)
+    if result:
+        await message.answer(
+            f"✅ Способ *{format_payment_info(name, bank, details)}* добавлен.",
+            parse_mode="Markdown"
+        )
+    else:
+        await message.answer("ℹ️ Такой способ уже есть.")
+    await state.clear()
+
+
+@router.callback_query(F.data == "payment_add_skip")
+async def payment_add_skip(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    data = await state.get_data()
+    name = data.get("name")
+
+    result = add_payment_method(name, None, None)
+    if result:
+        await callback.message.answer(f"✅ Способ *{name}* добавлен.", parse_mode="Markdown")
+    else:
+        await callback.message.answer("ℹ️ Такой способ уже есть.")
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await state.clear()
+    await callback.answer()

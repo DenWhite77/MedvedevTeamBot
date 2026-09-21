@@ -7,6 +7,8 @@
 - Отметка «Оплатил»
 """
 import logging
+from urllib.parse import quote
+
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, LinkPreviewOptions
 
@@ -36,6 +38,9 @@ def format_event_message(event, participants):
     payment_info = event[8]
     comment = event[9] or "—"
 
+    # Ссылка на Яндекс.Карты (всегда в тексте события)
+    yandex_link = f"\n🗺 [Открыть на Яндекс.Картах](https://yandex.ru/maps/?text={quote(place)})"
+
     main_list = []
     reserve_list = []
 
@@ -57,7 +62,8 @@ def format_event_message(event, participants):
         f"👥 *Макс. участников:* {max_participants}\n"
         f"💰 *Стоимость:* {price} ₽\n"
         f"💳 *Оплата:* {payment_info}\n"
-        f"📝 *Комментарий:* {comment}\n\n"
+        f"📝 *Комментарий:* {comment}"
+        f"{yandex_link}\n\n"
     )
 
     if main_list:
