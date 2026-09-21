@@ -601,8 +601,7 @@ async def process_payment_manual(message: Message, state: FSMContext):
 
     await message.answer(
         f"💳 Название: *{name}*\n\n"
-        f"Введите банк и/или реквизиты (одной строкой).\n"
-        f"Пример: `Сбербанк или Т-банк +79267217588`\n\n"
+        f"Введите банк и реквизиты одной строкой:\n\n"
         f"Или нажмите «⏭ Пропустить».",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[

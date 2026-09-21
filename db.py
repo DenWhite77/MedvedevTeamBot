@@ -196,18 +196,17 @@ def _seed_defaults(cursor):
         """, default_durations)
         logger.info("Added default durations.")
 
-        # Дефолтные способы оплаты
-        cursor.execute("SELECT COUNT(*) FROM payment_methods;")
-        if cursor.fetchone()[0] == 0:
-            default_payment = [
-                ("Перевод на карту", "Сбербанк или Т-банк", "+79267217588", 1, 1),
-                ("Наличные", None, None, 0, 2),
-            ]
-            cursor.executemany("""
-                INSERT INTO payment_methods (name, bank, details, is_default, sort_order)
-                VALUES (?, ?, ?, ?, ?)
-            """, default_payment)
-            logger.info("Added default payment methods.")
+        # Дефолтные способы оплаты (INSERT OR IGNORE — не дублируются)
+        default_payment = [
+            ("Перевод на карту", "Сбербанк или Т-банк", "+79267217588", 1, 1),
+            ("Наличные", None, None, 0, 2),
+        ]
+        for name, bank, details, is_default, sort_order in default_payment:
+            cursor.execute("""
+                   INSERT OR IGNORE INTO payment_methods (name, bank, details, is_default, sort_order)
+                   VALUES (?, ?, ?, ?, ?)
+               """, (name, bank, details, is_default, sort_order))
+        logger.info("Ensured default payment methods.")
 
 
 # ============================================================
