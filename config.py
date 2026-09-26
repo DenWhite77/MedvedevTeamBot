@@ -11,15 +11,25 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ============================================================
-# БОТ И АДМИНЫ
+# РЕЖИМ: тест или прод
 # ============================================================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError(
-        "BOT_TOKEN не задан в .env. "
-        "Добавь строку вида: BOT_TOKEN=123456:ABC-DEF..."
-    )
+TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
 
+# ============================================================
+# БОТ
+# ============================================================
+if TEST_MODE:
+    BOT_TOKEN = os.getenv("BOT_TOKEN_TEST")
+    if not BOT_TOKEN:
+        raise ValueError("BOT_TOKEN_TEST не задан в .env.")
+else:
+    BOT_TOKEN = os.getenv("BOT_TOKEN_PROD")
+    if not BOT_TOKEN:
+        raise ValueError("BOT_TOKEN_PROD не задан в .env.")
+
+# ============================================================
+# АДМИНЫ
+# ============================================================
 ADMIN_IDS = [
     admin_id for admin_id in [
         int(os.getenv("ADMIN_ID", 0) or 0),
@@ -32,11 +42,6 @@ if not ADMIN_IDS:
         "Не задан ни один админ. "
         "Добавь в .env: ADMIN_ID=123456789 (и опционально ADMIN_ID_2=...)"
     )
-
-# ============================================================
-# РЕЖИМ: тест или прод
-# ============================================================
-TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
 
 # ============================================================
 # ГРУППА И ТОПИКИ
@@ -65,4 +70,3 @@ else:
         "flood":       {"name": "💬 Флудилка",          "thread_id": int(os.getenv("TOPIC_FLOOD", 4359) or 4359)},
         "camps":       {"name": "🏕 Кемпы и турниры",   "thread_id": int(os.getenv("TOPIC_CAMPS", 4559) or 4559)},
     }
-
