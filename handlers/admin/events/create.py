@@ -1,160 +1,62 @@
 """
-Модуль handlers/admin/events.py
+Модуль handlers/admin/events/create.py
 
-Создание события: направление, адрес (с картой), дата (календарь), время, длительность.
-Публикация события в топики с превью Яндекс.Карт.
-Удаление событий.
+Пошаговое создание события:
+- направление, адрес, дата (календарь), время начала, длительность,
+- макс. участников, цена, способ оплаты, комментарий.
+Плюс: skip, cancel.
 """
 import logging
-from datetime import datetime
 
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LinkPreviewOptions
-from aiogram import Bot
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
-from config import GROUP_ID, TOPICS
-
 from db import (
-    create_event, get_event, get_event_message_id, get_all_events,
-    mark_event_published, is_event_published, delete_event as db_delete_event,
-    get_directions, add_direction,
-    get_addresses, add_address,
-    get_start_times, add_start_time,
-    get_durations, add_duration,
+    add_direction,
+    add_address,
+    add_start_time,
+    add_payment_method,
     calculate_end_time,
-    get_payment_methods, get_payment_method,
-    add_payment_method, format_payment_info,
+    get_payment_method,
+    get_payment_methods,
+    get_start_times,
+    get_durations,
+    format_payment_info,
 )
 
 from keyboards import (
-    get_cancel_keyboard, get_skip_keyboard, get_main_menu,
-    get_publish_keyboard, get_event_keyboard, get_topics_keyboard,
-    get_directions_keyboard, get_addresses_keyboard,
-    get_start_times_keyboard, get_durations_keyboard,
-    get_calendar_keyboard, get_payment_methods_keyboard,
+    get_cancel_keyboard,
+    get_skip_keyboard,
+    get_main_menu,
+    get_start_times_keyboard,
+    get_durations_keyboard,
+    get_payment_methods_keyboard,
 )
 
-from .common import is_admin, build_event_summary
+from .states import NewEventStates, format_date_ru
+from .helpers import (
+    _ask_for_direction,
+    _ask_for_place,
+    _ask_for_date,
+    _ask_for_duration,
+    _finalize_event,
+)
+from ..common import is_admin
 
 logger = logging.getLogger(__name__)
 
-router = Router(name="admin_events")
-
-
-# ============================================================
-# ЛОКАЛИЗАЦИЯ ДАТЫ
-# ============================================================
-
-WEEKDAYS_RU = [
-    "Понедельник", "Вторник", "Среда", "Четверг",
-    "Пятница", "Суббота", "Воскресенье",
-]
-
-MONTHS_RU = {
-    1: "января", 2: "февраля", 3: "марта", 4: "апреля",
-    5: "мая", 6: "июня", 7: "июля", 8: "августа",
-    9: "сентября", 10: "октября", 11: "ноября", 12: "декабря",
-}
-
-
-def format_date_ru(date: datetime) -> str:
-    """Форматирует дату как «20 сентября 2026 (Воскресенье)»."""
-    weekday = WEEKDAYS_RU[date.weekday()]
-    month = MONTHS_RU[date.month]
-    return f"{date.day} {month} {date.year} ({weekday})"
-
-
-class NewEventStates(StatesGroup):
-    direction = State()
-    direction_manual = State()
-    place = State()
-    place_manual = State()
-    date = State()
-    time_start = State()
-    time_start_manual = State()
-    time_duration = State()
-    max_participants = State()
-    price = State()
-    payment_pick = State()
-    payment_manual = State()
-    payment_manual_details = State()
-    comment = State()
-
-
-# ============================================================
-# ХЕЛПЕРЫ
-# ============================================================
-
-async def _ask_for_direction(target_message, state: FSMContext):
-    directions = get_directions()
-    if directions:
-        await target_message.answer(
-            "🏐 *Выберите направление:*\n\n⭐ — основное.",
-            parse_mode="Markdown",
-            reply_markup=get_directions_keyboard(directions)
-        )
-        await state.set_state(NewEventStates.direction)
-    else:
-        await target_message.answer(
-            "🏐 Введите направление вручную:",
-            reply_markup=get_cancel_keyboard()
-        )
-        await state.set_state(NewEventStates.direction_manual)
-
-
-async def _ask_for_place(target_message, state: FSMContext):
-    addresses = get_addresses()
-    if addresses:
-        await target_message.answer(
-            "📍 *Выберите место проведения:*\n\n⭐ — основной адрес.",
-            parse_mode="Markdown",
-            reply_markup=get_addresses_keyboard(addresses)
-        )
-        await state.set_state(NewEventStates.place)
-    else:
-        await target_message.answer(
-            "📍 Введите адрес вручную:",
-            reply_markup=get_cancel_keyboard()
-        )
-        await state.set_state(NewEventStates.place_manual)
-
-
-async def _ask_for_date(target_message, state: FSMContext):
-    await target_message.answer(
-        "📅 *Выберите дату:*",
-        parse_mode="Markdown",
-        reply_markup=await get_calendar_keyboard()
-    )
-    await state.set_state(NewEventStates.date)
-
-
-async def _ask_for_duration(target_message, state: FSMContext):
-    durations = get_durations()
-    if durations:
-        await target_message.answer(
-            "⏱ *Выберите длительность:*",
-            parse_mode="Markdown",
-            reply_markup=get_durations_keyboard(durations)
-        )
-        await state.set_state(NewEventStates.time_duration)
-    else:
-        await target_message.answer(
-            "⏱ Введите длительность в часах (например, «2»):",
-            reply_markup=get_cancel_keyboard()
-        )
-        await state.set_state(NewEventStates.time_duration)
+router_create = Router(name="admin_events_create")
 
 
 # ============================================================
 # СТАРТ СОЗДАНИЯ
 # ============================================================
 
-@router.message(Command("new_event"))
+@router_create.message(Command("new_event"))
 async def new_event_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await message.answer("⛔ У вас нет прав на это действие.")
@@ -163,7 +65,7 @@ async def new_event_start(message: Message, state: FSMContext):
     await _ask_for_direction(message, state)
 
 
-@router.callback_query(F.data == "new_event")
+@router_create.callback_query(F.data == "new_event")
 async def new_event_callback(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ У вас нет прав.", show_alert=True)
@@ -177,9 +79,10 @@ async def new_event_callback(callback: CallbackQuery, state: FSMContext):
 # НАПРАВЛЕНИЕ
 # ============================================================
 
-@router.callback_query(F.data.startswith("direction_pick_"))
+@router_create.callback_query(F.data.startswith("direction_pick_"))
 async def direction_picked(callback: CallbackQuery, state: FSMContext):
     dir_id = int(callback.data.split("_")[2])
+    from db import get_directions
     directions = get_directions()
     chosen = next((d for d in directions if d[0] == dir_id), None)
 
@@ -197,7 +100,7 @@ async def direction_picked(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "direction_manual")
+@router_create.callback_query(F.data == "direction_manual")
 async def direction_manual_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "🏐 Введите направление:\n\nПример: Волейбол классический",
@@ -207,7 +110,7 @@ async def direction_manual_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(NewEventStates.direction_manual)
+@router_create.message(NewEventStates.direction_manual)
 async def process_direction_manual(message: Message, state: FSMContext):
     direction = message.text.strip()
     await state.update_data(direction=direction, pending_direction=direction)
@@ -222,7 +125,7 @@ async def process_direction_manual(message: Message, state: FSMContext):
     )
 
 
-@router.callback_query(F.data == "direction_save_yes")
+@router_create.callback_query(F.data == "direction_save_yes")
 async def direction_save_yes(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     direction = data.get("pending_direction")
@@ -239,7 +142,7 @@ async def direction_save_yes(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "direction_save_no")
+@router_create.callback_query(F.data == "direction_save_no")
 async def direction_save_no(callback: CallbackQuery, state: FSMContext):
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -253,9 +156,10 @@ async def direction_save_no(callback: CallbackQuery, state: FSMContext):
 # АДРЕС
 # ============================================================
 
-@router.callback_query(F.data.startswith("addr_pick_"))
+@router_create.callback_query(F.data.startswith("addr_pick_"))
 async def address_picked(callback: CallbackQuery, state: FSMContext):
     addr_id = int(callback.data.split("_")[2])
+    from db import get_addresses
     addresses = get_addresses()
     chosen = next((a for a in addresses if a[0] == addr_id), None)
 
@@ -273,7 +177,7 @@ async def address_picked(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "addr_manual")
+@router_create.callback_query(F.data == "addr_manual")
 async def address_manual_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "📍 Введите адрес:\n\nПример: ул. Подольских Курсантов, 16-А (Школа № 657)",
@@ -283,7 +187,7 @@ async def address_manual_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(NewEventStates.place_manual)
+@router_create.message(NewEventStates.place_manual)
 async def process_place_manual(message: Message, state: FSMContext):
     address = message.text.strip()
     await state.update_data(place=address, pending_address=address)
@@ -299,7 +203,7 @@ async def process_place_manual(message: Message, state: FSMContext):
     )
 
 
-@router.callback_query(F.data == "addr_save_yes")
+@router_create.callback_query(F.data == "addr_save_yes")
 async def address_save_yes(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     address = data.get("pending_address")
@@ -319,7 +223,7 @@ async def address_save_yes(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "addr_save_no")
+@router_create.callback_query(F.data == "addr_save_no")
 async def address_save_no(callback: CallbackQuery, state: FSMContext):
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -330,10 +234,10 @@ async def address_save_no(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================
-# ДАТА (КАЛЕНДАРЬ)
+# ДАТА
 # ============================================================
 
-@router.callback_query(SimpleCalendarCallback.filter())
+@router_create.callback_query(SimpleCalendarCallback.filter())
 async def process_calendar_date(callback: CallbackQuery, callback_data: dict, state: FSMContext):
     try:
         calendar = SimpleCalendar(locale='ru_RU')
@@ -379,7 +283,7 @@ async def process_calendar_date(callback: CallbackQuery, callback_data: dict, st
 # ВРЕМЯ НАЧАЛА
 # ============================================================
 
-@router.callback_query(F.data.startswith("time_start_pick_"))
+@router_create.callback_query(F.data.startswith("time_start_pick_"))
 async def time_start_picked(callback: CallbackQuery, state: FSMContext):
     time_id = int(callback.data.split("_")[3])
     start_times = get_start_times()
@@ -399,7 +303,7 @@ async def time_start_picked(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "time_start_manual")
+@router_create.callback_query(F.data == "time_start_manual")
 async def time_start_manual_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "🕐 Введите время начала:\n\nПример: 20:00",
@@ -409,7 +313,7 @@ async def time_start_manual_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(NewEventStates.time_start_manual)
+@router_create.message(NewEventStates.time_start_manual)
 async def process_time_start_manual(message: Message, state: FSMContext):
     time_str = message.text.strip()
     parts = time_str.replace(".", ":").split(":")
@@ -428,7 +332,7 @@ async def process_time_start_manual(message: Message, state: FSMContext):
     )
 
 
-@router.callback_query(F.data == "time_start_save_yes")
+@router_create.callback_query(F.data == "time_start_save_yes")
 async def time_start_save_yes(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     time_str = data.get("pending_start_time")
@@ -445,7 +349,7 @@ async def time_start_save_yes(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "time_start_save_no")
+@router_create.callback_query(F.data == "time_start_save_no")
 async def time_start_save_no(callback: CallbackQuery, state: FSMContext):
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -459,7 +363,7 @@ async def time_start_save_no(callback: CallbackQuery, state: FSMContext):
 # ДЛИТЕЛЬНОСТЬ
 # ============================================================
 
-@router.callback_query(F.data.startswith("duration_pick_"))
+@router_create.callback_query(F.data.startswith("duration_pick_"))
 async def duration_picked(callback: CallbackQuery, state: FSMContext):
     dur_id = int(callback.data.split("_")[2])
     durations = get_durations()
@@ -489,7 +393,7 @@ async def duration_picked(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(NewEventStates.time_duration)
+@router_create.message(NewEventStates.time_duration)
 async def process_duration_manual(message: Message, state: FSMContext):
     if not message.text.strip().isdigit():
         await message.answer("⚠️ Введите целое число часов (например, «2»).")
@@ -510,10 +414,10 @@ async def process_duration_manual(message: Message, state: FSMContext):
 
 
 # ============================================================
-# ОСТАЛЬНЫЕ ШАГИ
+# МАКС. УЧАСТНИКОВ / ЦЕНА / ОПЛАТА / КОММЕНТАРИЙ
 # ============================================================
 
-@router.message(NewEventStates.max_participants)
+@router_create.message(NewEventStates.max_participants)
 async def process_max_participants(message: Message, state: FSMContext):
     if not message.text.isdigit():
         await message.answer("⚠️ Пожалуйста, введите число.")
@@ -526,7 +430,7 @@ async def process_max_participants(message: Message, state: FSMContext):
     await state.set_state(NewEventStates.price)
 
 
-@router.message(NewEventStates.price)
+@router_create.message(NewEventStates.price)
 async def process_price(message: Message, state: FSMContext):
     if not message.text.isdigit():
         await message.answer("⚠️ Пожалуйста, введите число.")
@@ -549,11 +453,8 @@ async def process_price(message: Message, state: FSMContext):
         await state.set_state(NewEventStates.payment_manual)
 
 
-@router.callback_query(F.data.startswith("payment_pick_"))
+@router_create.callback_query(F.data.startswith("payment_pick_"))
 async def payment_picked(callback: CallbackQuery, state: FSMContext):
-    """Админ выбрал способ оплаты из библиотеки."""
-    logger.info(f"=== PAYMENT PICKED called. data={callback.data} ===")
-
     pm_id = int(callback.data.split("_")[2])
     method = get_payment_method(pm_id)
 
@@ -580,11 +481,10 @@ async def payment_picked(callback: CallbackQuery, state: FSMContext):
         reply_markup=get_skip_keyboard()
     )
     await state.set_state(NewEventStates.comment)
-    logger.info(f"=== COMMENT STATE SET: {await state.get_state()} ===")
     await callback.answer()
 
 
-@router.callback_query(F.data == "payment_manual")
+@router_create.callback_query(F.data == "payment_manual")
 async def payment_manual_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "💳 Введите название способа оплаты:\n\nПример: Перевод на карту",
@@ -594,7 +494,7 @@ async def payment_manual_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(NewEventStates.payment_manual)
+@router_create.message(NewEventStates.payment_manual)
 async def process_payment_manual(message: Message, state: FSMContext):
     name = message.text.strip()
     await state.update_data(pending_payment_name=name)
@@ -612,7 +512,7 @@ async def process_payment_manual(message: Message, state: FSMContext):
     await state.set_state(NewEventStates.payment_manual_details)
 
 
-@router.message(NewEventStates.payment_manual_details)
+@router_create.message(NewEventStates.payment_manual_details)
 async def process_payment_manual_details(message: Message, state: FSMContext):
     details_line = message.text.strip()
     data = await state.get_data()
@@ -639,7 +539,7 @@ async def process_payment_manual_details(message: Message, state: FSMContext):
     )
 
 
-@router.callback_query(F.data == "payment_details_skip")
+@router_create.callback_query(F.data == "payment_details_skip")
 async def payment_details_skip(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     name = data.get("pending_payment_name")
@@ -662,7 +562,7 @@ async def payment_details_skip(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "payment_save_yes")
+@router_create.callback_query(F.data == "payment_save_yes")
 async def payment_save_yes(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     full = data.get("pending_payment_full")
@@ -686,7 +586,7 @@ async def payment_save_yes(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "payment_save_no")
+@router_create.callback_query(F.data == "payment_save_no")
 async def payment_save_no(callback: CallbackQuery, state: FSMContext):
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -704,9 +604,8 @@ async def payment_save_no(callback: CallbackQuery, state: FSMContext):
 # КОММЕНТАРИЙ + SKIP + CANCEL
 # ============================================================
 
-@router.message(NewEventStates.comment)
+@router_create.message(NewEventStates.comment)
 async def process_comment(message: Message, state: FSMContext):
-    logger.info(f"=== PROCESS COMMENT called. state={await state.get_state()} ===")
     if message.text == "⏭ Пропустить":
         await state.update_data(comment="")
     else:
@@ -714,205 +613,29 @@ async def process_comment(message: Message, state: FSMContext):
     await _finalize_event(message, state, is_callback=False)
 
 
-@router.callback_query(F.data == "skip")
+@router_create.callback_query(F.data == "skip")
 async def skip_comment(callback: CallbackQuery, state: FSMContext):
     current_state = await state.get_state()
-    logger.info(f"=== SKIP called. state={current_state} ===")
-
     if current_state == NewEventStates.comment:
         await state.update_data(comment="")
         await _finalize_event(callback, state, is_callback=True)
         await callback.answer()
     else:
         await callback.answer(
-            f"⚠️ SKIP: state={current_state}, ожидалось comment",
+            "⚠️ Кнопка доступна только на шаге комментария.",
             show_alert=True
         )
 
 
-@router.message(Command("cancel"))
+@router_create.message(Command("cancel"))
 async def cancel_handler(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Действие отменено.", reply_markup=get_main_menu())
 
 
-@router.callback_query(F.data == "cancel")
+@router_create.callback_query(F.data == "cancel")
 async def cancel_callback(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.answer("Действие отменено.", reply_markup=get_main_menu())
     await callback.answer()
-
-
-async def _finalize_event(message_or_callback, state: FSMContext, is_callback: bool):
-    data = await state.get_data()
-    summary = build_event_summary(data)
-
-    event_id = create_event(
-        title=data['direction'],
-        direction=data['direction'],
-        place=data['place'],
-        date=data['date'],
-        time=data['time'],
-        max_participants=data['max_participants'],
-        price=data['price'],
-        payment_info=data['payment_info'],
-        comment=data.get('comment', '')
-    )
-
-    target = message_or_callback.message if is_callback else message_or_callback
-    await target.answer(summary, parse_mode="Markdown", reply_markup=get_publish_keyboard(event_id))
-    await target.answer(
-        f"✅ Событие создано! ID: `{event_id}`.\nТеперь его можно опубликовать.",
-        parse_mode="Markdown"
-    )
-    await state.clear()
-
-
-# ============================================================
-# ПУБЛИКАЦИЯ
-# ============================================================
-
-@router.callback_query(F.data.startswith("publish_event_"))
-async def publish_event(callback: CallbackQuery, bot: Bot):
-    event_id = int(callback.data.split("_")[2])
-    await callback.message.answer(
-        "📤 Куда опубликовать событие?\n\nВыберите топик:",
-        reply_markup=get_topics_keyboard(event_id)
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("topic_"))
-async def publish_to_topic(callback: CallbackQuery, bot: Bot):
-    parts = callback.data.split("_")
-    topic_key = parts[1]
-    event_id = int(parts[2])
-
-    topic = TOPICS.get(topic_key)
-    if not topic:
-        await callback.answer("⚠️ Топик не найден.", show_alert=True)
-        return
-
-    if is_event_published(event_id):
-        await callback.answer("⚠️ Событие уже опубликовано!", show_alert=True)
-        return
-
-    event = get_event(event_id)
-    if not event:
-        await callback.answer("⚠️ Событие не найдено.", show_alert=True)
-        return
-
-    from handlers.user import format_event_message
-    text = format_event_message(event, participants=[])
-
-    try:
-        if topic["thread_id"] is None:
-            sent = await bot.send_message(
-                chat_id=GROUP_ID, text=text, parse_mode="Markdown",
-                reply_markup=get_event_keyboard(event_id)
-            )
-        else:
-            sent = await bot.send_message(
-                chat_id=GROUP_ID, message_thread_id=topic["thread_id"],
-                text=text, parse_mode="Markdown",
-                reply_markup=get_event_keyboard(event_id)
-            )
-
-        mark_event_published(event_id, topic["thread_id"], sent.message_id)
-        await callback.message.answer(f"✅ Событие опубликовано в топик {topic['name']}!")
-
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-    except Exception as e:
-        await callback.message.answer(f"❌ Ошибка при публикации: {e}")
-    await callback.answer()
-
-
-@router.message(Command("topic_id"))
-async def get_topic_id(message: Message):
-    await message.answer(
-        f"📌 message_thread_id: {message.message_thread_id}\nchat_id: {message.chat.id}"
-    )
-
-
-# ============================================================
-# УДАЛЕНИЕ
-# ============================================================
-
-@router.callback_query(F.data == "delete_event_list")
-async def delete_event_list(callback: CallbackQuery, bot: Bot):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ У вас нет прав.", show_alert=True)
-        return
-
-    events = get_all_events()
-    if not events:
-        await callback.message.answer("⚠️ Нет активных событий.")
-        await callback.answer()
-        return
-
-    buttons = []
-    for event in events:
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"🗑 {event[1]} — {event[4]}",
-                callback_data=f"delete_{event[0]}"
-            )
-        ])
-    buttons.append([InlineKeyboardButton(text="🔙 Закрыть", callback_data="close_list")])
-
-    await callback.message.answer(
-        "🗑 *Выберите событие для удаления:*",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("delete_") & ~F.data.startswith("delete_event_list"))
-async def delete_event(callback: CallbackQuery, bot: Bot):
-    event_id = int(callback.data.split("_")[1])
-
-    if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ У вас нет прав.", show_alert=True)
-        return
-
-    event = get_event(event_id)
-    if not event:
-        await callback.answer("⚠️ Событие не найдено.", show_alert=True)
-        return
-
-    message_id = get_event_message_id(event_id)
-    if message_id:
-        try:
-            await bot.delete_message(chat_id=GROUP_ID, message_id=message_id)
-            logger.info(f"Message {message_id} deleted from group.")
-        except Exception as e:
-            logger.warning(f"Cannot delete message from group: {e}")
-
-    ok = db_delete_event(event_id)
-    if ok:
-        await callback.message.answer(f"🗑 Событие ID={event_id} удалено.")
-    else:
-        await callback.message.answer(f"⚠️ Событие ID={event_id} не найдено.")
-    await callback.answer()
-
-
-@router.callback_query(F.data == "close_list")
-async def close_list(callback: CallbackQuery):
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
-    await callback.answer()
-
-
-@router.callback_query(F.data == "edit_event_list")
-async def edit_event_list(callback: CallbackQuery, bot: Bot):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ У вас нет прав.", show_alert=True)
-        return
-    await callback.message.answer("✏️ Редактирование событий — в разработке.")
-    await callback.answer()
+    

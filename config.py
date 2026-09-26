@@ -65,3 +65,4 @@ else:
         "flood":       {"name": "💬 Флудилка",          "thread_id": int(os.getenv("TOPIC_FLOOD", 4359) or 4359)},
         "camps":       {"name": "🏕 Кемпы и турниры",   "thread_id": int(os.getenv("TOPIC_CAMPS", 4559) or 4559)},
     }
+
