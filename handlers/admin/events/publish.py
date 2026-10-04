@@ -67,7 +67,7 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
             sent = await bot.send_message(
                 chat_id=GROUP_ID,
                 text=text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=get_event_keyboard(event_id)
             )
         else:
@@ -75,7 +75,7 @@ async def publish_to_topic(callback: CallbackQuery, bot: Bot):
                 chat_id=GROUP_ID,
                 message_thread_id=topic["thread_id"],
                 text=text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=get_event_keyboard(event_id)
             )
 
@@ -96,4 +96,3 @@ async def get_topic_id(message: Message):
     await message.answer(
         f"📌 message_thread_id: {message.message_thread_id}\nchat_id: {message.chat.id}"
     )
-    

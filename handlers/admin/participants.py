@@ -54,10 +54,10 @@ async def list_participants(callback: CallbackQuery, bot: Bot):
         return
 
     await callback.message.answer(
-        f"📋 *Список участников события:*\n"
+        f"📋 <b>Список участников события:</b>\n"
         f"📅 {event[1]}\n\n"
         f"Нажмите «❌ Выписать», чтобы удалить участника.",
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=get_admin_list_keyboard(event_id, participants)
     )
     await callback.answer()
@@ -96,7 +96,7 @@ async def remove_participant_handler(callback: CallbackQuery, bot: Bot):
                 chat_id=GROUP_ID,
                 message_id=message_id,
                 text=new_text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=get_event_keyboard(event_id),
                 link_preview_options=LinkPreviewOptions(is_disabled=True)
             )
@@ -107,11 +107,11 @@ async def remove_participant_handler(callback: CallbackQuery, bot: Bot):
     try:
         await callback.message.edit_text(
             text=(
-                f"📋 *Список участников события:*\n"
+                f"📋 <b>Список участников события:</b>\n"
                 f"📅 {event[1]}\n\n"
                 f"Нажмите «❌ Выписать», чтобы удалить участника."
             ),
-            parse_mode="Markdown",
+            parse_mode="HTML",
             reply_markup=get_admin_list_keyboard(event_id, participants)
         )
     except Exception as e:
@@ -155,7 +155,7 @@ async def confirm_payment_handler(callback: CallbackQuery, bot: Bot):
                 chat_id=GROUP_ID,
                 message_id=message_id,
                 text=new_text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=get_event_keyboard(event_id),
                 link_preview_options=LinkPreviewOptions(is_disabled=True)
             )
@@ -196,7 +196,7 @@ async def reject_payment_handler(callback: CallbackQuery, bot: Bot):
                 chat_id=GROUP_ID,
                 message_id=message_id,
                 text=new_text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=get_event_keyboard(event_id),
                 link_preview_options=LinkPreviewOptions(is_disabled=True)
             )

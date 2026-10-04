@@ -15,7 +15,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 
 from db import (
     get_directions, add_direction, delete_direction, set_default_direction,
-    get_addresses, add_address, delete_address, set_default_address,
+    get_addresses, add_address, update_address, delete_address, set_default_address,
     get_start_times, add_start_time, delete_start_time,
     get_durations, add_duration, delete_duration,
     get_payment_methods, add_payment_method, delete_payment_method,
@@ -42,7 +42,9 @@ class DirectionStates(StatesGroup):
 
 
 class AddressStates(StatesGroup):
+    """Состояния для управления адресами."""
     add = State()
+    edit = State()
 
 
 class StartTimeStates(StatesGroup):
@@ -674,3 +676,64 @@ async def payment_add_skip(callback: CallbackQuery, state: FSMContext):
         pass
     await state.clear()
     await callback.answer()
+
+
+# ============================================================
+# РЕДАКТИРОВАНИЕ АДРЕСА
+# ============================================================
+
+@router.callback_query(F.data.startswith("addr_edit_"))
+async def addr_edit_start(callback: CallbackQuery, state: FSMContext):
+    """Начало редактирования адреса."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    addr_id = int(callback.data.split("_")[2])
+    addresses = get_addresses()
+    chosen = next((a for a in addresses if a[0] == addr_id), None)
+    if not chosen:
+        await callback.answer("⚠️ Адрес не найден.", show_alert=True)
+        return
+
+    await state.update_data(edit_address_id=addr_id)
+    await callback.message.answer(
+        f"✏️ *Редактирование адреса*\n\n"
+        f"Текущий: `{chosen[1]}`\n\n"
+        f"Введите новый текст адреса:",
+        parse_mode="Markdown",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(AddressStates.edit)
+    await callback.answer()
+
+
+@router.message(AddressStates.edit)
+async def addr_edit_process(message: Message, state: FSMContext):
+    """Принимает новый текст адреса и обновляет."""
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ У вас нет прав.")
+        return
+
+    data = await state.get_data()
+    addr_id = data.get("edit_address_id")
+    new_address = message.text.strip()
+
+    if not addr_id:
+        await message.answer("⚠️ Что-то пошло не так. Начните заново.")
+        await state.clear()
+        return
+
+    ok = await update_address(addr_id, new_address)
+    if ok:
+        await message.answer(
+            f"✅ Адрес обновлён:\n`{new_address}`",
+            parse_mode="Markdown"
+        )
+    else:
+        await message.answer(
+            "⚠️ Не удалось обновить.\n"
+            "Возможно, такой адрес уже есть."
+        )
+
+    await state.clear()

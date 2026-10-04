@@ -196,17 +196,17 @@ def _seed_defaults(cursor):
         """, default_durations)
         logger.info("Added default durations.")
 
-        # Дефолтные способы оплаты (INSERT OR IGNORE — не дублируются)
-        default_payment = [
-            ("Перевод на карту", "Сбербанк или Т-банк", "+79267217588", 1, 1),
-            ("Наличные", None, None, 0, 2),
-        ]
-        for name, bank, details, is_default, sort_order in default_payment:
-            cursor.execute("""
-                   INSERT OR IGNORE INTO payment_methods (name, bank, details, is_default, sort_order)
+        # Дефолтные способы оплаты
+        cursor.execute("SELECT COUNT(*) FROM payment_methods;")
+        if cursor.fetchone()[0] == 0:
+            default_payment = [
+                ("Перевод на карту", "Сбербанк или Т-банк", "+79267217588", 1, 1),
+            ]
+            cursor.executemany("""
+                   INSERT INTO payment_methods (name, bank, details, is_default, sort_order)
                    VALUES (?, ?, ?, ?, ?)
-               """, (name, bank, details, is_default, sort_order))
-        logger.info("Ensured default payment methods.")
+               """, default_payment)
+            logger.info("Added default payment methods.")
 
 
 # ============================================================
@@ -391,21 +391,50 @@ def add_to_main(event_id, user_id):
         conn.commit()
 
 
+def mark_paid_cash(event_id, user_id):
+    """Отмечает участника как «оплатит наличными» (paid = 2)."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE participants SET paid = 2 WHERE event_id = ? AND user_id = ?
+        """, (event_id, user_id))
+        conn.commit()
+
+
+def get_participant_status(event_id, user_id):
+    """
+    Возвращает статус участника:
+    (status, paid) — или (None, None), если не найден.
+    paid: 0 = не оплачено, 1 = оплачено картой, 2 = наличными.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT status, paid FROM participants
+            WHERE event_id = ? AND user_id = ?
+        """, (event_id, user_id))
+        row = cursor.fetchone()
+        return row if row else (None, None)
+
+
 # ============================================================
 # БИБЛИОТЕКА АДРЕСОВ
 # ============================================================
 
 def get_addresses():
+    """Возвращает список: id, address, is_default."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, address, is_default FROM addresses
+            SELECT id, address, is_default
+            FROM addresses
             ORDER BY is_default DESC, id ASC
         """)
         return cursor.fetchall()
 
 
 def get_address_full(address_id: int):
+    """Возвращает: id, address, latitude, longitude, is_default."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -413,16 +442,6 @@ def get_address_full(address_id: int):
             FROM addresses WHERE id = ?
         """, (address_id,))
         return cursor.fetchone()
-
-
-def get_address_coords_by_text(address: str):
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT latitude, longitude FROM addresses WHERE address = ?", (address,))
-        row = cursor.fetchone()
-        if row and row[0] is not None:
-            return row[0], row[1]
-        return None, None
 
 
 def get_default_address():
@@ -433,31 +452,109 @@ def get_default_address():
         return row[0] if row else None
 
 
+def _reassign_default_address():
+    """
+    Если ни одного дефолтного — назначает первый по id.
+    Вызывается после удаления дефолтного.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM addresses WHERE is_default = 1")
+        if cursor.fetchone()[0] > 0:
+            return
+        cursor.execute("SELECT id FROM addresses ORDER BY id ASC LIMIT 1")
+        row = cursor.fetchone()
+        if row:
+            cursor.execute("UPDATE addresses SET is_default = 1 WHERE id = ?", (row[0],))
+            conn.commit()
+            logger.info(f"Reassigned default address to id={row[0]}")
+
+
 async def add_address(address: str, is_default: bool = False):
+    """
+    Добавляет адрес с автоматическим геокодированием.
+    Возвращает ID или None, если такой адрес уже есть.
+    """
     lat, lon = await geocode_address(address)
+
     with get_connection() as conn:
         cursor = conn.cursor()
         try:
             if is_default:
                 cursor.execute("UPDATE addresses SET is_default = 0;")
+
             cursor.execute("""
                 INSERT INTO addresses (address, latitude, longitude, is_default)
                 VALUES (?, ?, ?, ?)
             """, (address, lat, lon, 1 if is_default else 0))
             conn.commit()
-            return cursor.lastrowid
+            addr_id = cursor.lastrowid
+
+            # Если это первый адрес в базе — делаем его дефолтным
+            cursor.execute("SELECT COUNT(*) FROM addresses")
+            if cursor.fetchone()[0] == 1:
+                cursor.execute("UPDATE addresses SET is_default = 1 WHERE id = ?", (addr_id,))
+                conn.commit()
+
+            logger.info(f"Address added: id={addr_id}, address='{address}', lat={lat}, lon={lon}")
+            return addr_id
         except sqlite3.IntegrityError:
             logger.warning(f"Address already exists: {address}")
             return None
 
 
-def delete_address(address_id):
+async def update_address(address_id: int, new_address: str):
+    """
+    Обновляет текст адреса + пересчитывает координаты.
+    Возвращает True при успехе, False если адрес не найден.
+    """
+    lat, lon = await geocode_address(new_address)
+
     with get_connection() as conn:
         cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                UPDATE addresses
+                SET address = ?, latitude = ?, longitude = ?
+                WHERE id = ?
+            """, (new_address, lat, lon, address_id))
+            updated = cursor.rowcount
+            conn.commit()
+
+            if updated == 0:
+                logger.warning(f"Address {address_id} not found for update.")
+                return False
+
+            logger.info(f"Address {address_id} updated: '{new_address}'")
+            return True
+        except sqlite3.IntegrityError:
+            logger.warning(f"Address already exists: {new_address}")
+            return False
+
+
+def delete_address(address_id):
+    """
+    Удаляет адрес. Если удалили дефолтный — переназначает на первый оставшийся.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT is_default FROM addresses WHERE id = ?", (address_id,))
+        row = cursor.fetchone()
+        if not row:
+            logger.warning(f"Address {address_id} not found for deletion.")
+            return False
+
+        was_default = row[0] == 1
+
         cursor.execute("DELETE FROM addresses WHERE id = ?", (address_id,))
-        deleted = cursor.rowcount
         conn.commit()
-        return deleted > 0
+
+    if was_default:
+        _reassign_default_address()
+
+    logger.info(f"Address {address_id} deleted.")
+    return True
 
 
 def set_default_address(address_id):
@@ -466,29 +563,6 @@ def set_default_address(address_id):
         cursor.execute("UPDATE addresses SET is_default = 0;")
         cursor.execute("UPDATE addresses SET is_default = 1 WHERE id = ?", (address_id,))
         conn.commit()
-
-
-async def migrate_addresses():
-    """Одноразовая миграция координат для адресов без lat/lon."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, address FROM addresses WHERE latitude IS NULL OR longitude IS NULL")
-        rows = cursor.fetchall()
-
-    if not rows:
-        logger.info("Migrate addresses: nothing to do.")
-        return
-
-    for addr_id, address in rows:
-        lat, lon = await geocode_address(address)
-        if lat is not None and lon is not None:
-            with get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("UPDATE addresses SET latitude = ?, longitude = ? WHERE id = ?", (lat, lon, addr_id))
-                conn.commit()
-            logger.info(f"Migrated address id={addr_id}: lat={lat}, lon={lon}")
-        else:
-            logger.warning(f"Cannot geocode address id={addr_id}: '{address}'")
 
 
 # ============================================================

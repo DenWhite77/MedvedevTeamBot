@@ -616,15 +616,25 @@ async def process_comment(message: Message, state: FSMContext):
 @router_create.callback_query(F.data == "skip")
 async def skip_comment(callback: CallbackQuery, state: FSMContext):
     current_state = await state.get_state()
-    if current_state == NewEventStates.comment:
-        await state.update_data(comment="")
-        await _finalize_event(callback, state, is_callback=True)
-        await callback.answer()
-    else:
+    if current_state != NewEventStates.comment:
         await callback.answer(
             "⚠️ Кнопка доступна только на шаге комментария.",
             show_alert=True
         )
+        return
+
+    data = await state.get_data()
+    if not data.get("direction"):
+        await callback.answer(
+            "⚠️ Данные создания события потеряны. Начните заново: /new_event",
+            show_alert=True
+        )
+        await state.clear()
+        return
+
+    await state.update_data(comment="")
+    await _finalize_event(callback, state, is_callback=True)
+    await callback.answer()
 
 
 @router_create.message(Command("cancel"))
@@ -638,4 +648,3 @@ async def cancel_callback(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.answer("Действие отменено.", reply_markup=get_main_menu())
     await callback.answer()
-    

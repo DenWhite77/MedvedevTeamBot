@@ -325,6 +325,12 @@ def get_address_info_keyboard(address_id, is_default):
         ])
     buttons.append([
         InlineKeyboardButton(
+            text="✏️ Редактировать",
+            callback_data=f"addr_edit_{address_id}"
+        )
+    ])
+    buttons.append([
+        InlineKeyboardButton(
             text="🗑 Удалить адрес",
             callback_data=f"addr_del_{address_id}"
         )

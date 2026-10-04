@@ -16,7 +16,7 @@ from config import ADMIN_IDS, GROUP_ID
 
 from db import (
     get_event, get_event_message_id, add_participant, get_participants,
-    remove_participant, mark_paid,
+    remove_participant, mark_paid, get_participant_status,
 )
 
 from keyboards import get_event_keyboard
@@ -28,7 +28,7 @@ router = Router(name="user")
 
 
 def format_event_message(event, participants):
-    """Формирует текст сообщения с событием и списком участников."""
+    """Формирует текст сообщения с событием и списком участников (HTML)."""
     direction = event[1]
     place = event[3]
     date = event[4]
@@ -39,7 +39,7 @@ def format_event_message(event, participants):
     comment = event[9] or "—"
 
     # Ссылка на Яндекс.Карты (всегда в тексте события)
-    yandex_link = f"\n🗺 [Открыть на Яндекс.Картах](https://yandex.ru/maps/?text={quote(place)})"
+    yandex_link = f'\n🗺 <a href="https://yandex.ru/maps/?text={quote(place)}">Открыть на Яндекс.Картах</a>'
 
     main_list = []
     reserve_list = []
@@ -47,33 +47,40 @@ def format_event_message(event, participants):
     for p in participants:
         user_id, username, full_name, status, paid = p
         name = full_name or username or f"id{user_id}"
-        marker = " 💳" if paid else ""
+
+        # Кликабельное имя (ссылка на профиль через tg://user?id=)
+        link = f'<a href="tg://user?id={user_id}">{name}</a>'
+        if username:
+            link += f' (@{username})'
+
+        # Маркер оплаты: 💳 — оплачено
+        marker = " 💳" if paid == 1 else ""
 
         if status == "main":
-            main_list.append(f"✅ {name}{marker}")
+            main_list.append(f"✅ {link}{marker}")
         else:
-            reserve_list.append(f"🕐 {name}{marker}")
+            reserve_list.append(f"🕐 {link}{marker}")
 
     text = (
-        f"📅 *{direction}*\n\n"
-        f"📍 *Место:* {place}\n"
-        f"📅 *Дата:* {date}\n"
-        f"🕐 *Время:* {time}\n"
-        f"👥 *Макс. участников:* {max_participants}\n"
-        f"💰 *Стоимость:* {price} ₽\n"
-        f"💳 *Оплата:* {payment_info}\n"
-        f"📝 *Комментарий:* {comment}"
+        f"📅 <b>{direction}</b>\n\n"
+        f"📍 <b>Место:</b> {place}\n"
+        f"📅 <b>Дата:</b> {date}\n"
+        f"🕐 <b>Время:</b> {time}\n"
+        f"👥 <b>Макс. участников:</b> {max_participants}\n"
+        f"💰 <b>Стоимость:</b> {price} ₽\n"
+        f"💳 <b>Оплата:</b> {payment_info}\n"
+        f"📝 <b>Комментарий:</b> {comment}"
         f"{yandex_link}\n\n"
     )
 
     if main_list:
-        text += f"*Основной состав ({len(main_list)}):*\n" + "\n".join(main_list) + "\n\n"
+        text += f"<b>Основной состав ({len(main_list)}):</b>\n" + "\n".join(main_list) + "\n\n"
 
     if reserve_list:
-        text += f"*Резерв ({len(reserve_list)}):*\n" + "\n".join(reserve_list) + "\n\n"
+        text += f"<b>Резерв ({len(reserve_list)}):</b>\n" + "\n".join(reserve_list) + "\n\n"
 
     if not main_list and not reserve_list:
-        text += "_Пока никто не записался._\n\n"
+        text += "<i>Пока никто не записался.</i>\n\n"
 
     text += "Нажмите «✅ Я в деле», чтобы записаться!"
 
@@ -132,7 +139,7 @@ async def join_event(callback: CallbackQuery, bot: Bot):
                 chat_id=GROUP_ID,
                 message_id=message_id,
                 text=new_text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=get_event_keyboard(event_id),
                 link_preview_options=LinkPreviewOptions(is_disabled=True)
             )
@@ -150,15 +157,18 @@ async def paid_event(callback: CallbackQuery, bot: Bot):
         await callback.answer("⚠️ Событие не найдено.", show_alert=True)
         return
 
-    participants = get_participants(event_id)
-    user_ids = [p[0] for p in participants]
-
     user = callback.from_user
-    if user.id not in user_ids:
+    status, paid = get_participant_status(event_id, user.id)
+
+    if status is None:
         await callback.answer(
             "⚠️ Сначала нажмите «✅ Я в деле», чтобы записаться!",
             show_alert=True
         )
+        return
+
+    if paid == 1:
+        await callback.answer("✅ Оплата уже на рассмотрении.", show_alert=True)
         return
 
     mark_paid(event_id, user.id)
@@ -177,7 +187,7 @@ async def paid_event(callback: CallbackQuery, bot: Bot):
                 chat_id=GROUP_ID,
                 message_id=message_id,
                 text=new_text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=get_event_keyboard(event_id),
                 link_preview_options=LinkPreviewOptions(is_disabled=True)
             )
@@ -250,7 +260,7 @@ async def cancel_event(callback: CallbackQuery, bot: Bot):
                 chat_id=GROUP_ID,
                 message_id=message_id,
                 text=new_text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=get_event_keyboard(event_id),
                 link_preview_options=LinkPreviewOptions(is_disabled=True)
             )
