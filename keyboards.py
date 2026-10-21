@@ -14,7 +14,8 @@ from config import TOPICS
 def get_main_menu():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📅 Создать событие", callback_data="new_event")],
-        [InlineKeyboardButton(text="✏️ Редактировать событие", callback_data="edit_event_list")],
+        # Меняем callback_data на admin_manage_lists:
+        [InlineKeyboardButton(text="✏️ Редактировать событие", callback_data="admin_manage_lists")],
         [InlineKeyboardButton(text="🗑 Удалить событие", callback_data="delete_event_list")],
         [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings_menu")],
     ])
@@ -61,20 +62,45 @@ def get_admin_event_keyboard(event_id):
 
 
 def get_admin_list_keyboard(event_id, participants):
+    """
+    Улучшенная клавиатура управления участниками.
+    Исключает конфликты Telegram API с URL-кнопками.
+    """
     buttons = []
-    for p in participants:
-        user_id, username, full_name, status, paid = p
-        name = full_name or username or f"id{user_id}"
-        marker = "✅" if status == "main" else "🕐"
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"❌ Выписать {marker} {name}",
-                callback_data=f"remove_{event_id}_{user_id}"
+
+    if not participants:
+        buttons.append([InlineKeyboardButton(text="📭 Список пуст", callback_data="empty_click")])
+    else:
+        for p in participants:
+            user_id, username, full_name, status, paid = p
+            name = full_name or username or f"id{user_id}"
+
+            # Определяем маркер и кнопку переключения статуса
+            if status == "main":
+                status_marker = "🟢"
+                toggle_text = "🟡 В запасной"
+                toggle_callback = f"to_reserve_{event_id}_{user_id}"
+            else:
+                status_marker = "🟡"
+                toggle_text = "🟢 В основной"
+                toggle_callback = f"to_main_{event_id}_{user_id}"
+
+            # Создаем безопасную callback-кнопку с именем (без принудительного URL)
+            name_btn = InlineKeyboardButton(
+                text=f"{status_marker} {name}",
+                callback_data=f"participant_{event_id}_{user_id}"
             )
-        ])
-    buttons.append([
-        InlineKeyboardButton(text="🔙 Закрыть", callback_data="close_list")
-    ])
+
+            # Кнопки управления
+            toggle_btn = InlineKeyboardButton(text=toggle_text, callback_data=toggle_callback)
+            delete_btn = InlineKeyboardButton(text="❌ Удалить", callback_data=f"remove_{event_id}_{user_id}")
+
+            # Добавляем в клавиатуру: имя отдельной строкой, управление — под ним в один ряд
+            buttons.append([name_btn])
+            buttons.append([toggle_btn, delete_btn])
+
+    # Кнопка возврата
+    buttons.append([InlineKeyboardButton(text="🔙 Закрыть", callback_data="close_list")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

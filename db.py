@@ -152,53 +152,59 @@ def _seed_defaults(cursor):
     _migrate_addresses_columns(cursor)
 
     # Дефолтный адрес
-    cursor.execute("SELECT COUNT(*) FROM addresses;")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("""
-            INSERT INTO addresses (address, is_default)
-            VALUES (?, 1)
-        """, ("ул. Подольских Курсантов, 16-А (Школа № 657)",))
-        logger.info("Added default address.")
+    def _seed_defaults(cursor):
+        """Заполняет таблицы дефолтными значениями (только если они пустые)."""
 
-    # Дефолтные направления
-    cursor.execute("SELECT COUNT(*) FROM directions;")
-    if cursor.fetchone()[0] == 0:
-        default_directions = [
-            ("Волейбол классический", 1, 1),
-            ("Волейбол пляжный", 0, 2),
-            ("Падл", 0, 3),
-        ]
-        cursor.executemany("""
-            INSERT INTO directions (name, is_default, sort_order)
-            VALUES (?, ?, ?)
-        """, default_directions)
-        logger.info("Added default directions.")
+        _migrate_addresses_columns(cursor)
 
-    # Дефолтные времена начала
-    cursor.execute("SELECT COUNT(*) FROM start_times;")
-    if cursor.fetchone()[0] == 0:
-        default_times = [
-            ("18:00", 1), ("19:00", 2), ("20:00", 3), ("21:00", 4),
-        ]
-        cursor.executemany("""
-            INSERT INTO start_times (time, sort_order) VALUES (?, ?)
-        """, default_times)
-        logger.info("Added default start times.")
+        # Дефолтный адрес
+        cursor.execute("SELECT COUNT(*) FROM addresses;")
+        if cursor.fetchone()[0] == 0:  # <--- Исправлено [0]
+            cursor.execute("""
+                INSERT INTO addresses (address, is_default)
+                VALUES (?, 1)
+            """, ("ул. Подольских Курсантов, 16-А (Школа № 657)",))
+            logger.info("Added default address.")
 
-    # Дефолтные длительности
-    cursor.execute("SELECT COUNT(*) FROM durations;")
-    if cursor.fetchone()[0] == 0:
-        default_durations = [
-            (1, "1 час", 1), (2, "2 часа", 2), (3, "3 часа", 3),
-        ]
-        cursor.executemany("""
-            INSERT INTO durations (hours, label, sort_order) VALUES (?, ?, ?)
-        """, default_durations)
-        logger.info("Added default durations.")
+        # Дефолтные направления
+        cursor.execute("SELECT COUNT(*) FROM directions;")
+        if cursor.fetchone()[0] == 0:  # <--- Исправлено [0]
+            default_directions = [
+                ("Волейбол классический", 1, 1),
+                ("Волейбол пляжный", 0, 2),
+                ("Падл", 0, 3),
+            ]
+            cursor.executemany("""
+                INSERT INTO directions (name, is_default, sort_order)
+                VALUES (?, ?, ?)
+            """, default_directions)
+            logger.info("Added default directions.")
+
+        # Дефолтные времена начала
+        cursor.execute("SELECT COUNT(*) FROM start_times;")
+        if cursor.fetchone()[0] == 0:  # <--- Исправлено [0]
+            default_times = [
+                ("18:00", 1), ("19:00", 2), ("20:00", 3), ("21:00", 4),
+            ]
+            cursor.executemany("""
+                INSERT INTO start_times (time, sort_order) VALUES (?, ?)
+            """, default_times)
+            logger.info("Added default start times.")
+
+        # Дефолтные длительности
+        cursor.execute("SELECT COUNT(*) FROM durations;")
+        if cursor.fetchone()[0] == 0:  # <--- Исправлено [0]
+            default_durations = [
+                (1, "1 час", 1), (2, "2 часа", 2), (3, "3 часа", 3),
+            ]
+            cursor.executemany("""
+                INSERT INTO durations (hours, label, sort_order) VALUES (?, ?, ?)
+            """, default_durations)
+            logger.info("Added default durations.")
 
         # Дефолтные способы оплаты
         cursor.execute("SELECT COUNT(*) FROM payment_methods;")
-        if cursor.fetchone()[0] == 0:
+        if cursor.fetchone()[0] == 0:  # <--- Исправлено [0]
             default_payment = [
                 ("Перевод на карту", "Сбербанк или Т-банк", "+79267217588", 1, 1),
             ]
@@ -397,6 +403,17 @@ def mark_paid_cash(event_id, user_id):
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE participants SET paid = 2 WHERE event_id = ? AND user_id = ?
+        """, (event_id, user_id))
+        conn.commit()
+
+
+def move_to_reserve(event_id, user_id):
+    """Переводит участника из основного в запасной (сбрасывает оплату)."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE participants SET status = 'reserve', paid = 0
+            WHERE event_id = ? AND user_id = ?
         """, (event_id, user_id))
         conn.commit()
 
