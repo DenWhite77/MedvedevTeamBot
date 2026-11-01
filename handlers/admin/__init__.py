@@ -9,9 +9,11 @@ from aiogram import Router
 from . import events
 from . import settings
 from . import participants
+from . import wallets  # Подключаем наш новый модуль кошельков
 
 
 router = Router(name="admin")
 router.include_router(events.router)
 router.include_router(settings.router)
 router.include_router(participants.router)
+router.include_router(wallets.router)  # Включаем его роутер в общую цепочку

@@ -12,12 +12,21 @@ from config import TOPICS
 # ============================================================
 
 def get_main_menu():
+    """Главное меню для администраторов."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📅 Создать событие", callback_data="new_event")],
-        # Меняем callback_data на admin_manage_lists:
         [InlineKeyboardButton(text="✏️ Редактировать событие", callback_data="admin_manage_lists")],
+        [InlineKeyboardButton(text="💰 Депозиты участников", callback_data="admin_manage_wallets")],
         [InlineKeyboardButton(text="🗑 Удалить событие", callback_data="delete_event_list")],
         [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings_menu")],
+    ])
+    return keyboard
+
+
+def get_user_wallet_keyboard():
+    """Клавиатура в ЛК/сообщении кошелька для обычного пользователя."""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Обновить баланс", callback_data="refresh_wallet")],
     ])
     return keyboard
 
@@ -33,6 +42,45 @@ def get_skip_keyboard():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⏭ Пропустить", callback_data="skip")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")],
+    ])
+    return keyboard
+
+
+# ============================================================
+# Клавиатуры для участников (ВЫБОР МЕСТ + ДЕПОЗИТ)
+# ============================================================
+
+def get_guests_keyboard(event_id):
+    """Клавиатура выбора количества мест прямо в группе."""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👤 Только я", callback_data=f"slots_{event_id}_0")],
+        [InlineKeyboardButton(text="👥 +1 друг", callback_data=f"slots_{event_id}_1")],
+        [InlineKeyboardButton(text="👥 +2 друга", callback_data=f"slots_{event_id}_2")],
+        [InlineKeyboardButton(text="👥 +3 друга", callback_data=f"slots_{event_id}_3")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")],
+    ])
+    return keyboard
+
+
+def get_payment_type_keyboard(event_id, additional_players):
+    """Выбор способа оплаты: картой Лере или с баланса кошелька."""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 Оплатить из кошелька", callback_data=f"pay_wallet_{event_id}_{additional_players}")],
+        [InlineKeyboardButton(text="💳 Обычный перевод на карту", callback_data=f"pay_card_{event_id}_{additional_players}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")],
+    ])
+    return keyboard
+
+
+def get_event_keyboard(event_id):
+    """Клавиатура под анонсом события в канале/чате группы."""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я в деле", callback_data=f"join_{event_id}")],
+        [
+            InlineKeyboardButton(text="💰 Оплатить из кошелька", callback_data=f"pay_group_wallet_{event_id}"),
+            InlineKeyboardButton(text="💳 Оплатил (карта)", callback_data=f"paid_{event_id}"),
+        ],
+        [InlineKeyboardButton(text="❌ Отменить запись", callback_data=f"cancel_{event_id}")],
     ])
     return keyboard
 
@@ -62,20 +110,16 @@ def get_admin_event_keyboard(event_id):
 
 
 def get_admin_list_keyboard(event_id, participants):
-    """
-    Улучшенная клавиатура управления участниками.
-    Исключает конфликты Telegram API с URL-кнопками.
-    """
+    """Улучшенная клавиатура управления участниками."""
     buttons = []
 
     if not participants:
         buttons.append([InlineKeyboardButton(text="📭 Список пуст", callback_data="empty_click")])
     else:
         for p in participants:
-            user_id, username, full_name, status, paid = p
+            user_id, username, full_name, status, paid = p[:5]
             name = full_name or username or f"id{user_id}"
 
-            # Определяем маркер и кнопку переключения статуса
             if status == "main":
                 status_marker = "🟢"
                 toggle_text = "🟡 В запасной"
@@ -85,36 +129,18 @@ def get_admin_list_keyboard(event_id, participants):
                 toggle_text = "🟢 В основной"
                 toggle_callback = f"to_main_{event_id}_{user_id}"
 
-            # Создаем безопасную callback-кнопку с именем (без принудительного URL)
             name_btn = InlineKeyboardButton(
                 text=f"{status_marker} {name}",
                 callback_data=f"participant_{event_id}_{user_id}"
             )
-
-            # Кнопки управления
             toggle_btn = InlineKeyboardButton(text=toggle_text, callback_data=toggle_callback)
             delete_btn = InlineKeyboardButton(text="❌ Удалить", callback_data=f"remove_{event_id}_{user_id}")
 
-            # Добавляем в клавиатуру: имя отдельной строкой, управление — под ним в один ряд
             buttons.append([name_btn])
             buttons.append([toggle_btn, delete_btn])
 
-    # Кнопка возврата
     buttons.append([InlineKeyboardButton(text="🔙 Закрыть", callback_data="close_list")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-# ============================================================
-# Клавиатуры для участников
-# ============================================================
-
-def get_event_keyboard(event_id):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Я в деле", callback_data=f"join_{event_id}")],
-        [InlineKeyboardButton(text="💳 Оплатил", callback_data=f"paid_{event_id}")],
-        [InlineKeyboardButton(text="❌ Отменить запись", callback_data=f"cancel_{event_id}")],
-    ])
-    return keyboard
 
 
 def get_topics_keyboard(event_id):
@@ -153,10 +179,6 @@ def get_payment_confirm_keyboard(event_id, user_id):
 # ============================================================
 
 def get_directions_keyboard(directions):
-    """
-    Клавиатура выбора направления.
-    directions: список кортежей (id, name, is_default) из db.get_directions()
-    """
     buttons = []
     for dir_id, name, is_default in directions:
         label = name if len(name) <= 40 else name[:37] + "..."
@@ -265,8 +287,6 @@ def get_settings_menu():
     return keyboard
 
 
-# --- Управление НАПРАВЛЕНИЯМИ ---
-
 def get_directions_management_keyboard(directions):
     buttons = []
     for dir_id, name, is_default in directions:
@@ -312,8 +332,6 @@ def get_direction_info_keyboard(direction_id, is_default):
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-
-# --- Управление АДРЕСАМИ ---
 
 def get_address_management_keyboard(addresses):
     buttons = []
@@ -367,8 +385,6 @@ def get_address_info_keyboard(address_id, is_default):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-# --- Управление ВРЕМЕНАМИ НАЧАЛА ---
-
 def get_start_times_management_keyboard(start_times):
     buttons = []
     for time_id, time_str in start_times:
@@ -392,8 +408,6 @@ def get_start_times_management_keyboard(start_times):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-# --- Управление ДЛИТЕЛЬНОСТЯМИ ---
-
 def get_durations_management_keyboard(durations):
     buttons = []
     for dur_id, hours, label in durations:
@@ -416,6 +430,7 @@ def get_durations_management_keyboard(durations):
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+
 # ============================================================
 # КАЛЕНДАРЬ (для выбора даты)
 # ============================================================
@@ -430,18 +445,14 @@ async def get_calendar_keyboard():
     except Exception:
         return await SimpleCalendar().start_calendar()
 
+
 # ============================================================
 # ОПЛАТА: ВЫБОР И УПРАВЛЕНИЕ
 # ============================================================
 
 def get_payment_methods_keyboard(methods):
-    """
-    Клавиатура выбора способа оплаты при создании события.
-    methods: список кортежей (id, name, bank, details, is_default)
-    """
     buttons = []
     for pm_id, name, bank, details, is_default in methods:
-        # Формируем текст кнопки: "⭐ Перевод на карту (Сбербанк или Т-банк)"
         label = name
         if bank:
             label += f" ({bank})"
@@ -465,10 +476,6 @@ def get_payment_methods_keyboard(methods):
 
 
 def get_payment_methods_management_keyboard(methods):
-    """
-    Клавиатура управления способами оплаты (в настройках).
-    methods: список кортежей (id, name, bank, details, is_default)
-    """
     buttons = []
     for pm_id, name, bank, details, is_default in methods:
         label = name
@@ -499,7 +506,6 @@ def get_payment_methods_management_keyboard(methods):
 
 
 def get_payment_method_info_keyboard(method_id, is_default):
-    """Клавиатура для конкретного способа оплаты."""
     buttons = []
     if not is_default:
         buttons.append([
@@ -518,3 +524,13 @@ def get_payment_method_info_keyboard(method_id, is_default):
         InlineKeyboardButton(text="🔙 К списку", callback_data="manage_payments")
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_admin_wallet_management_keyboard():
+    """Меню управления депозитами для Леры."""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Начислить / Списать баланс", callback_data="admin_deposit_money")],
+        [InlineKeyboardButton(text="📊 Список всех депозитов", callback_data="admin_list_wallets")],
+        [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="back_to_menu")],
+    ])
+    return keyboard

@@ -115,23 +115,62 @@ def init_db():
 
         # Таблица способов оплаты
         cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS payment_methods (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        name TEXT NOT NULL,
-                        bank TEXT,
-                        details TEXT,
-                        is_default INTEGER DEFAULT 0,
-                        sort_order INTEGER DEFAULT 0,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE (name, bank)
-                    );
-                """)
+            CREATE TABLE IF NOT EXISTS payment_methods (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                bank TEXT,
+                details TEXT,
+                is_default INTEGER DEFAULT 0,
+                sort_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (name, bank)
+            );
+        """)
 
         conn.commit()
+
+        # Запускаем создание новых таблиц и миграции колонок
+        _init_wallet_tables(cursor)
+        _migrate_participants_columns(cursor)
         _seed_defaults(cursor)
-        conn.commit()
 
+        conn.commit()
         logger.info("База данных инициализирована.")
+
+
+def _init_wallet_tables(cursor):
+    """Создает таблицы для кошельков и логов транзакций, если их нет."""
+    # Личные кошельки пользователей
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_wallets (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            full_name TEXT,
+            balance REAL DEFAULT 0.0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    # История пополнений и списаний (для аудита Леры)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS wallet_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            type TEXT NOT NULL, -- 'deposit' (пополнение) или 'expense' (списание)
+            comment TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+
+def _migrate_participants_columns(cursor):
+    """Добавляет колонку additional_players (+1, +2) в participants, если её нет."""
+    cursor.execute("PRAGMA table_info(participants);")
+    columns = [row[1] for row in cursor.fetchall()]
+    if "additional_players" not in columns:
+        cursor.execute("ALTER TABLE participants ADD COLUMN additional_players INTEGER DEFAULT 0;")
+        logger.info("Added column participants.additional_players")
 
 
 def _migrate_addresses_columns(cursor):
@@ -148,71 +187,64 @@ def _migrate_addresses_columns(cursor):
 
 def _seed_defaults(cursor):
     """Заполняет таблицы дефолтными значениями (только если они пустые)."""
-
     _migrate_addresses_columns(cursor)
 
     # Дефолтный адрес
-    def _seed_defaults(cursor):
-        """Заполняет таблицы дефолтными значениями (только если они пустые)."""
+    cursor.execute("SELECT COUNT(*) FROM addresses;")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("""
+            INSERT INTO addresses (address, is_default)
+            VALUES (?, 1)
+        """, ("ул. Подольских Курсантов, 16-А (Школа № 657)",))
+        logger.info("Added default address.")
 
-        _migrate_addresses_columns(cursor)
+    # Дефолтные направления
+    cursor.execute("SELECT COUNT(*) FROM directions;")
+    if cursor.fetchone()[0] == 0:
+        default_directions = [
+            ("Волейбол классический", 1, 1),
+            ("Волейбол пляжный", 0, 2),
+            ("Падл", 0, 3),
+        ]
+        cursor.executemany("""
+            INSERT INTO directions (name, is_default, sort_order)
+            VALUES (?, ?, ?)
+        """, default_directions)
+        logger.info("Added default directions.")
 
-        # Дефолтный адрес
-        cursor.execute("SELECT COUNT(*) FROM addresses;")
-        if cursor.fetchone()[0] == 0:  # <--- Исправлено [0]
-            cursor.execute("""
-                INSERT INTO addresses (address, is_default)
-                VALUES (?, 1)
-            """, ("ул. Подольских Курсантов, 16-А (Школа № 657)",))
-            logger.info("Added default address.")
+    # Дефолтные времена начала
+    cursor.execute("SELECT COUNT(*) FROM start_times;")
+    if cursor.fetchone()[0] == 0:
+        default_times = [
+            ("18:00", 1), ("19:00", 2), ("20:00", 3), ("21:00", 4),
+        ]
+        cursor.executemany("""
+            INSERT INTO start_times (time, sort_order) VALUES (?, ?)
+        """, default_times)
+        logger.info("Added default start times.")
 
-        # Дефолтные направления
-        cursor.execute("SELECT COUNT(*) FROM directions;")
-        if cursor.fetchone()[0] == 0:  # <--- Исправлено [0]
-            default_directions = [
-                ("Волейбол классический", 1, 1),
-                ("Волейбол пляжный", 0, 2),
-                ("Падл", 0, 3),
-            ]
-            cursor.executemany("""
-                INSERT INTO directions (name, is_default, sort_order)
-                VALUES (?, ?, ?)
-            """, default_directions)
-            logger.info("Added default directions.")
+    # Дефолтные длительности
+    cursor.execute("SELECT COUNT(*) FROM durations;")
+    if cursor.fetchone()[0] == 0:
+        default_durations = [
+            (1, "1 час", 1), (2, "2 часа", 2), (3, "3 часа", 3),
+        ]
+        cursor.executemany("""
+            INSERT INTO durations (hours, label, sort_order) VALUES (?, ?, ?)
+        """, default_durations)
+        logger.info("Added default durations.")
 
-        # Дефолтные времена начала
-        cursor.execute("SELECT COUNT(*) FROM start_times;")
-        if cursor.fetchone()[0] == 0:  # <--- Исправлено [0]
-            default_times = [
-                ("18:00", 1), ("19:00", 2), ("20:00", 3), ("21:00", 4),
-            ]
-            cursor.executemany("""
-                INSERT INTO start_times (time, sort_order) VALUES (?, ?)
-            """, default_times)
-            logger.info("Added default start times.")
-
-        # Дефолтные длительности
-        cursor.execute("SELECT COUNT(*) FROM durations;")
-        if cursor.fetchone()[0] == 0:  # <--- Исправлено [0]
-            default_durations = [
-                (1, "1 час", 1), (2, "2 часа", 2), (3, "3 часа", 3),
-            ]
-            cursor.executemany("""
-                INSERT INTO durations (hours, label, sort_order) VALUES (?, ?, ?)
-            """, default_durations)
-            logger.info("Added default durations.")
-
-        # Дефолтные способы оплаты
-        cursor.execute("SELECT COUNT(*) FROM payment_methods;")
-        if cursor.fetchone()[0] == 0:  # <--- Исправлено [0]
-            default_payment = [
-                ("Перевод на карту", "Сбербанк или Т-банк", "+79267217588", 1, 1),
-            ]
-            cursor.executemany("""
-                   INSERT INTO payment_methods (name, bank, details, is_default, sort_order)
-                   VALUES (?, ?, ?, ?, ?)
-               """, default_payment)
-            logger.info("Added default payment methods.")
+    # Дефолтные способы оплаты
+    cursor.execute("SELECT COUNT(*) FROM payment_methods;")
+    if cursor.fetchone()[0] == 0:
+        default_payment = [
+            ("Перевод на карту", "Сбербанк или Т-банк", "+79267217588", 1, 1),
+        ]
+        cursor.executemany("""
+               INSERT INTO payment_methods (name, bank, details, is_default, sort_order)
+               VALUES (?, ?, ?, ?, ?)
+           """, default_payment)
+        logger.info("Added default payment methods.")
 
 
 # ============================================================
@@ -368,12 +400,14 @@ def confirm_payment(event_id, user_id):
 
 
 def get_participants(event_id):
+    """Возвращает список участников события с учетом поля гостей."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT user_id, username, full_name, status, paid
-            FROM participants WHERE event_id = ?
-            ORDER BY status DESC, id ASC
+            SELECT user_id, username, full_name, status, paid, additional_players 
+            FROM participants 
+            WHERE event_id = ?
+            ORDER BY id ASC;
         """, (event_id,))
         return cursor.fetchall()
 
