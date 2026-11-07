@@ -139,6 +139,12 @@ def get_admin_list_keyboard(event_id, participants):
             buttons.append([name_btn])
             buttons.append([toggle_btn, delete_btn])
 
+    # Новая кнопка: добавить участника
+    buttons.append([InlineKeyboardButton(
+        text="➕ Добавить участника",
+        callback_data=f"admin_add_participant_{event_id}"
+    )])
+
     buttons.append([InlineKeyboardButton(text="🔙 Закрыть", callback_data="close_list")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

@@ -8,16 +8,18 @@
 - Отклонение оплаты (выписка)
 """
 import logging
-from aiogram import Router, F
-from aiogram.types import CallbackQuery, LinkPreviewOptions
-from aiogram import Bot
+from aiogram import Router, F, Bot
+from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 
 from config import GROUP_ID
 
 from db import (
     get_event, get_event_message_id, get_participants,
-    remove_participant, confirm_payment,
-    add_to_main, move_to_reserve,
+    remove_participant, confirm_payment, reset_payment,
+    add_to_main, move_to_reserve, add_participant_by_admin,
+    get_connection,
 )
 
 from keyboards import (
@@ -166,7 +168,7 @@ async def confirm_payment_handler(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("reject_payment_"))
 async def reject_payment_handler(callback: CallbackQuery, bot: Bot):
-    """Админ отклоняет оплату — участник выписывается."""
+    """Админ отклоняет оплату — участник остаётся в резерве, оплата сбрасывается."""
     parts = callback.data.split("_")
     event_id = int(parts[2])
     user_id = int(parts[3])
@@ -180,8 +182,8 @@ async def reject_payment_handler(callback: CallbackQuery, bot: Bot):
         await callback.answer("⚠️ Событие не найдено.", show_alert=True)
         return
 
-    remove_participant(event_id, user_id)
-    await callback.answer("❌ Участник выписан.")
+    reset_payment(event_id, user_id)  # Сброс оплаты, не удаление
+    await callback.answer("❌ Оплата отклонена. Участник остался в резерве.")
 
     logger.info(f"Админ отклонил оплату: event_id={event_id}, user_id={user_id}")
 
@@ -204,7 +206,7 @@ async def reject_payment_handler(callback: CallbackQuery, bot: Bot):
         except Exception as e:
             logger.warning(f"Не удалось обновить сообщение: {e}")
 
-    await callback.message.answer("❌ Участник выписан из события.")
+    await callback.message.answer("❌ Оплата отклонена. Участник остался в резерве.")
 
 
 # ============================================================
@@ -291,3 +293,120 @@ async def _refresh_participants_message(callback: CallbackQuery, bot: Bot, event
         )
     except Exception as e:
         logger.warning(f"Не удалось обновить список: {e}")
+
+
+# ============================================================
+# ДОБАВЛЕНИЕ УЧАСТНИКА ВРУЧНУЮ
+# ============================================================
+
+
+class AddParticipantStates(StatesGroup):
+    waiting_for_user = State()
+
+
+@router.callback_query(F.data.startswith("admin_add_participant_"))
+async def add_participant_start(callback: CallbackQuery, state: FSMContext):
+    """Кнопка «➕ Добавить участника» — запрос ID / @username / сообщения."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ У вас нет прав.", show_alert=True)
+        return
+
+    event_id = int(callback.data.split("_")[3])
+    await state.update_data(event_id=event_id)
+    await callback.message.answer(
+        f"➕ <b>Добавление участника</b>\n\n"
+        f"Перешлите сообщение от игрока, или введите его <b>Telegram ID</b> "
+        f"(число) / <b>@username</b>:",
+        parse_mode="HTML"
+    )
+    await state.set_state(AddParticipantStates.waiting_for_user)
+    await callback.answer()
+
+
+@router.message(AddParticipantStates.waiting_for_user)
+async def add_participant_process(message: Message, state: FSMContext, bot: Bot):
+    """Принимает ID / @username / пересланное сообщение и добавляет в резерв."""
+    data = await state.get_data()
+    event_id = data.get("event_id")
+
+    target_user_id = None
+    username_db = None
+    full_name = None
+    username_input = None
+
+    if message.forward_from:
+        target_user_id = message.forward_from.id
+        username_db = message.forward_from.username
+        full_name = message.forward_from.full_name
+    else:
+        text = message.text.strip()
+        if text.isdigit():
+            target_user_id = int(text)
+        elif text.startswith("@"):
+            username_input = text.replace("@", "")
+        else:
+            await message.answer("❌ Неверный формат. Введите ID, @username или перешлите сообщение.")
+            return
+
+    # Если есть только username (без ID) — ищем в БД
+    if not target_user_id and username_input:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT user_id, username, full_name FROM participants WHERE LOWER(username) = LOWER(?) LIMIT 1",
+                (username_input,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                await message.answer(
+                    f"❌ Пользователь @{username_input} не найден в базе. "
+                    f"Перешлите его сообщение или введите Telegram ID."
+                )
+                await state.clear()
+                return
+            target_user_id, username_db, full_name = row
+
+    # Если знаем ID, но нет имени — пробуем получить через Telegram API
+    if target_user_id and not full_name:
+        try:
+            chat = await bot.get_chat(target_user_id)
+            username_db = chat.username
+            full_name = chat.full_name
+        except Exception as e:
+            logger.warning(f"Не удалось получить инфо о {target_user_id}: {e}")
+
+    # Добавляем участника в БД
+    ok = add_participant_by_admin(event_id, target_user_id, username_db, full_name)
+
+    if ok:
+        await message.answer(
+            f"✅ <b>Участник добавлен в резерв!</b>\n\n"
+            f"👤 {full_name or username_db or target_user_id}\n"
+            f"ID: <code>{target_user_id}</code>",
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer("⚠️ Участник уже записан на это событие.")
+
+    await state.clear()
+
+    # Обновляем сообщение в группе
+    from handlers.user import format_event_message
+    from db import get_event, get_participants, get_event_message_id
+    event = get_event(event_id)
+    participants = get_participants(event_id)
+    new_text = format_event_message(event, participants)
+    message_id = get_event_message_id(event_id)
+
+    if message_id:
+        try:
+            await bot.edit_message_text(
+                chat_id=GROUP_ID,
+                message_id=message_id,
+                text=new_text,
+                parse_mode="HTML",
+                reply_markup=get_event_keyboard(event_id),
+                link_preview_options=LinkPreviewOptions(is_disabled=True)
+            )
+        except Exception as e:
+            logger.warning(f"Не удалось обновить сообщение в группе: {e}")

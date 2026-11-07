@@ -452,6 +452,33 @@ def move_to_reserve(event_id, user_id):
         conn.commit()
 
 
+def reset_payment(event_id, user_id):
+    """Сбрасывает оплату (paid=0), оставляя участника в резерве."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE participants SET paid = 0, status = 'reserve'
+            WHERE event_id = ? AND user_id = ?
+        """, (event_id, user_id))
+        conn.commit()
+
+
+def add_participant_by_admin(event_id, user_id, username, full_name, status='reserve'):
+    """Добавляет участника вручную (без оплаты). Возвращает True/False."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO participants (event_id, user_id, username, full_name, status, paid)
+                VALUES (?, ?, ?, ?, ?, 0)
+            """, (event_id, user_id, username, full_name, status))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            logger.warning(f"User {user_id} already registered for event {event_id}.")
+            return False
+
+
 def get_participant_status(event_id, user_id):
     """
     Возвращает статус участника:
