@@ -16,8 +16,9 @@ router = Router()
 
 # Состояния для управления кошельками
 class WalletStates(StatesGroup):
-    waiting_for_user_identifier = State()  # Ожидание ID или юзернейма игрока
-    waiting_for_amount = State()           # Ожидание суммы пополнения
+    waiting_for_user_identifier = State()
+    waiting_for_amount = State()
+    processing = State()        # Ожидание суммы пополнения
 
 
 # ============================================================
@@ -157,6 +158,12 @@ async def admin_deposit_get_user(message: types.Message, state: FSMContext):
 @router.message(WalletStates.waiting_for_amount)
 async def admin_deposit_confirm(message: types.Message, state: FSMContext, bot: Bot):
     """Шаг 3: Проводим транзакцию, обновляем БД и уведомляем обе стороны."""
+    # Защита от двойного нажатия
+    current_state = await state.get_state()
+    if current_state == WalletStates.processing:
+        await message.answer("⏳ Транзакция уже обрабатывается, подождите...")
+        return
+
     try:
         amount = float(message.text.replace(",", ".").strip())
     except ValueError:
@@ -167,6 +174,9 @@ async def admin_deposit_confirm(message: types.Message, state: FSMContext, bot: 
     target_user_id = data["target_user_id"]
     name_to_show = data["name_to_show"]
 
+    # Ставим флаг «в процессе»
+    await state.set_state(WalletStates.processing)
+
     tx_type = "deposit" if amount >= 0 else "expense"
     comment = "Пополнение администратором" if amount >= 0 else "Ручное списание администратором"
 
@@ -174,7 +184,6 @@ async def admin_deposit_confirm(message: types.Message, state: FSMContext, bot: 
         with get_connection() as conn:
             cursor = conn.cursor()
 
-            # Проверяем, есть ли уже кошелек
             cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (target_user_id,))
             row = cursor.fetchone()
 
@@ -183,7 +192,8 @@ async def admin_deposit_confirm(message: types.Message, state: FSMContext, bot: 
                 cursor.execute("""
                     INSERT INTO user_wallets (user_id, username, full_name, balance)
                     VALUES (?, ?, ?, ?)
-                """, (target_user_id, message.from_user.username if target_user_id == message.from_user.id else None,
+                """, (target_user_id,
+                      message.from_user.username if target_user_id == message.from_user.id else None,
                       name_to_show, current_balance))
             else:
                 current_balance = row[0] + amount
@@ -193,7 +203,6 @@ async def admin_deposit_confirm(message: types.Message, state: FSMContext, bot: 
                     WHERE user_id = ?
                 """, (current_balance, target_user_id))
 
-            # Записываем лог операции
             cursor.execute("""
                 INSERT INTO wallet_transactions (user_id, amount, type, comment)
                 VALUES (?, ?, ?, ?)
@@ -236,3 +245,6 @@ async def admin_deposit_confirm(message: types.Message, state: FSMContext, bot: 
             )
     except Exception as notify_err:
         logger.warning(f"Не удалось отправить уведомление пользователю {target_user_id}: {notify_err}")
+
+    # Сбрасываем состояние (флаг «в процессе»)
+    await state.clear()

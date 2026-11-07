@@ -23,10 +23,19 @@ from keyboards import (
     get_event_keyboard, get_payment_confirm_keyboard,
     get_guests_keyboard, get_payment_type_keyboard,
 )
+from datetime import datetime, timedelta
+
 
 logger = logging.getLogger(__name__)
 
 router = Router(name="user")
+
+
+MONTHS_RU = {
+    1: "января", 2: "февраля", 3: "марта", 4: "апреля",
+    5: "мая", 6: "июня", 7: "июля", 8: "августа",
+    9: "сентября", 10: "октября", 11: "ноября", 12: "декабря",
+}
 
 
 def format_event_message(event, participants):
@@ -129,7 +138,6 @@ async def join_event(callback: CallbackQuery, bot: Bot):
 
 
 @router.callback_query(F.data.startswith("slots_"))
-@router.callback_query(F.data.startswith("slots_"))
 async def process_slots_selection(callback: CallbackQuery, bot: Bot):
     """Шаг 2: Игрок выбрал количество мест. Показываем кнопку оплаты."""
     parts = callback.data.split("_")
@@ -220,7 +228,9 @@ async def paid_event(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("cancel_"))
 async def cancel_event(callback: CallbackQuery, bot: Bot):
-    """Отмена записи с возвратом на депозит при оплате."""
+    """Отмена записи с возвратом на депозит при оплате (только до 12:00 дня игры)."""
+    from datetime import datetime
+
     event_id = int(callback.data.split("_")[1])
 
     event = get_event(event_id)
@@ -245,9 +255,45 @@ async def cancel_event(callback: CallbackQuery, bot: Bot):
 
         paid_status, additional_players = row
 
-    refund_text = ""
+    # Проверяем, была ли оплата из кошелька
+    was_wallet_payment = False
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 1 FROM wallet_transactions 
+            WHERE user_id = ? AND type = 'expense' 
+            AND comment LIKE ?
+            LIMIT 1
+        """, (user.id, f"%Автооплата игры ID {event_id}%"))
+        was_wallet_payment = cursor.fetchone() is not None
 
-    if paid_status == 1:
+    refund_text = ""
+    can_refund = True
+    refund_blocked_reason = ""
+
+    # Проверяем время возврата (12:00 дня игры)
+    if paid_status == 1 and was_wallet_payment:
+        try:
+            date_str = event[4]
+            parts = date_str.replace("(", "").replace(")", "").split()
+            day = int(parts[0])
+            month_name = parts[1].lower()
+            year = int(parts[2])
+
+            month_num = list(MONTHS_RU.values()).index(month_name) + 1
+            deadline = datetime(year, month_num, day, 12, 0, 0)
+
+            if datetime.now() >= deadline:
+                can_refund = False
+                refund_blocked_reason = (
+                    "⏰ Время возврата истекло (дедлайн — 12:00 дня игры). "
+                    "Средства не возвращаются."
+                )
+        except Exception as e:
+            logger.warning(f"Не удалось распарсить дату для возврата: {e}")
+
+    # Делаем возврат, только если можно
+    if paid_status == 1 and was_wallet_payment and can_refund:
         price = event[7]
         total_people = 1 + additional_players
         refund_amount = price * total_people
@@ -278,10 +324,28 @@ async def cancel_event(callback: CallbackQuery, bot: Bot):
 
         refund_text = f"\n\n💰 <b>Возврат средств:</b> {refund_amount} ₽ возвращены на ваш депозит.\n💳 <b>Текущий баланс:</b> {current_balance:,.2f} ₽"
 
-    remove_participant(event_id, user.id)
-    await callback.answer("✅ Запись успешно отменена.")
-    logger.info(f"User {user.id} cancelled registration. Refund processed: {paid_status == 1}")
 
+    elif paid_status == 1 and was_wallet_payment and not can_refund:
+
+        # Деньги сгорают — возврат не делаем, но показываем баланс
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (user.id,))
+            wallet_row = cursor.fetchone()
+            current_balance = wallet_row[0] if wallet_row else 0.0
+
+        refund_text = (
+            f"\n\n⚠️ <b>{refund_blocked_reason}</b>\n"
+            f"💳 <b>Текущий баланс:</b> {current_balance:,.2f} ₽"
+        )
+
+    # Удаляем участника (освобождаем место)
+    remove_participant(event_id, user.id)
+    await callback.answer("✅ Запись отменена.")
+
+    logger.info(f"User {user.id} cancelled registration. Refund: {can_refund and was_wallet_payment}")
+
+    # Уведомление в ЛС
     try:
         await bot.send_message(
             chat_id=user.id,
@@ -293,6 +357,7 @@ async def cancel_event(callback: CallbackQuery, bot: Bot):
     except Exception as e:
         logger.warning(f"Cannot send DM: {e}")
 
+    # Обновляем сообщение в группе
     participants = get_participants(event_id)
     new_text = format_event_message(event, participants)
     message_id = get_event_message_id(event_id)

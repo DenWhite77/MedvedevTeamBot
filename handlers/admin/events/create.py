@@ -52,6 +52,12 @@ logger = logging.getLogger(__name__)
 router_create = Router(name="admin_events_create")
 
 
+DEFAULT_COMMENT = (
+    "Для бронирования места на игровой тренировке нужно оплатить взнос "
+    "до 12:00 дня игры. По истечению этого времени средства не возвращаются. "
+    "Оплата = место на тренировке. Спасибо за понимание."
+)
+
 # ============================================================
 # СТАРТ СОЗДАНИЯ
 # ============================================================
@@ -477,7 +483,9 @@ async def payment_picked(callback: CallbackQuery, state: FSMContext):
         parse_mode="Markdown"
     )
     await callback.message.answer(
-        "📝 Введите комментарий (или нажмите «Пропустить»):",
+        f"📝 <b>Введите комментарий</b> (или нажмите «⏭ Пропустить» — подставится дефолтный):\n\n"
+        f"<i>{DEFAULT_COMMENT}</i>",
+        parse_mode="HTML",
         reply_markup=get_skip_keyboard()
     )
     await state.set_state(NewEventStates.comment)
@@ -607,7 +615,7 @@ async def payment_save_no(callback: CallbackQuery, state: FSMContext):
 @router_create.message(NewEventStates.comment)
 async def process_comment(message: Message, state: FSMContext):
     if message.text == "⏭ Пропустить":
-        await state.update_data(comment="")
+        await state.update_data(comment=DEFAULT_COMMENT)
     else:
         await state.update_data(comment=message.text)
     await _finalize_event(message, state, is_callback=False)
@@ -632,7 +640,7 @@ async def skip_comment(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    await state.update_data(comment="")
+    await state.update_data(comment=DEFAULT_COMMENT)
     await _finalize_event(callback, state, is_callback=True)
     await callback.answer()
 
